@@ -22,11 +22,11 @@ for dir in plugins/*/; do
   claude plugin validate "$dir"
 
   # Only run tests when the mod has test files; claude plugin test fails on none
-  if find "$dir" -name '*.test.ts' -not -path '*/node_modules/*' | grep -q .; then
+  if find "$dir" \( -name '*.test.ts' -o -name '*.test.tsx' \) -not -path '*/node_modules/*' | grep -q .; then
     echo "check: test $name"
     (cd "$dir" && claude plugin test)
   else
-    echo "check: test $name skipped (no *.test.ts yet)"
+    echo "check: test $name skipped (no *.test.ts or *.test.tsx yet)"
   fi
 done
 

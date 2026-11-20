@@ -2,5 +2,11 @@
   "name": "qol",
   "owner": { "name": "MrRoco" },
   "description": "Quality-of-life mods for Claude Code",
-  "plugins": []
+  "plugins": [
+    {
+      "name": "task-bar",
+      "source": "./plugins/task-bar",
+      "description": "A progress bar above the prompt for Claude's to-do list, and a Crew pane with a live card per subagent"
+    }
+  ]
 }

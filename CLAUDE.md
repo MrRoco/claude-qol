@@ -20,7 +20,8 @@ plugins/<name>/
   .claude-plugin/plugin.json      name, version, description, author MrRoco, license MIT
   hooks/hooks.json                { "modules": ["./register.tsx"] }
   hooks/register.tsx              the hooks module
-  tests/<name>.test.ts            run with claude plugin test
+  types/index.d.ts                $.state contract, when the mod keeps state ("types" in plugin.json)
+  tests/<name>.test.ts(x)         run with claude plugin test
   README.md
 scripts/check.sh                  validate and test everything
 ```
@@ -46,3 +47,4 @@ scripts/check.sh                       # validate the marketplace and every mod,
 ## Phase contracts
 
 - `.plan/phase0-contract.md` — marketplace skeleton
+- `.plan/phase1-contract.md` — task-bar

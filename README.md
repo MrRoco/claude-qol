@@ -7,7 +7,7 @@ Each mod is a small plugin that adds a helper or changes what you see while you 
 
 | Mod              | What it does                                                           | Status  |
 | ---------------- | ---------------------------------------------------------------------- | ------- |
-| `task-bar`       | Progress of Claude's to-do list and subagents                          | planned |
+| `task-bar`       | Progress of Claude's to-do list and subagents                          | 0.1.0   |
 | `fresh-start`    | Hand a long chat over to a fresh one                                   | planned |
 | `cache-timer`    | Time left before the prompt cache goes cold                            | planned |
 | `prompt-shaper`  | Turn a loose prompt into a clear brief                                 | planned |
