@@ -24,6 +24,11 @@
       "name": "chat-ledger",
       "source": "./plugins/chat-ledger",
       "description": "A Ledger pane listing the connectors, files, skills, commands and context files this chat used"
+    },
+    {
+      "name": "lesson-saver",
+      "source": "./plugins/lesson-saver",
+      "description": "Notices when you correct Claude and offers to save the fix as a rule in CLAUDE.md"
     }
   ]
 }
