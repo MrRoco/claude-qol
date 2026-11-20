@@ -54,6 +54,8 @@ type World = {
   advance: (ms: number) => Promise<void>;
   // What the next side request answers: text, or no answer at all.
   reply: string | null;
+  // How long the next side request takes on the held clock.
+  replyDelayMs: number;
 };
 
 type WorldOptions = {
@@ -64,6 +66,12 @@ type WorldOptions = {
   isPromptDropped?: boolean;
   // How long the write takes on the held clock.
   writeDelayMs?: number;
+  // Writes are recorded but the files stay as they were (changed back elsewhere).
+  isWriteLost?: boolean;
+  // Files that exist but cannot be read.
+  unreadable?: string[];
+  // What the chain beneath settles the prompt to (another mod masking it).
+  enteredText?: string;
 };
 
 /**
@@ -88,7 +96,9 @@ const world = (on: On, options: WorldOptions = {}): World => {
     calls: [],
     advance: (ms) => clock.advance(ms),
     reply: verdict(RULE),
+    replyDelayMs: 0,
   };
+  const unreadable = new Set(options.unreadable ?? []);
 
   on("session.root", () => ({ value: options.root ?? ROOT }));
   on("session.end", (_, e) => ({ sessionId: e.sessionId }));
@@ -99,9 +109,9 @@ const world = (on: On, options: WorldOptions = {}): World => {
 
     return options.isPromptDropped === true
       ? { drop: "busy" }
-      : { text: e.text };
+      : { text: options.enteredText ?? e.text };
   });
-  on("model.complete", (_, e) => {
+  on("model.complete", async (_, e) => {
     result.calls.push("model");
     result.models.push({
       model: e.model,
@@ -110,6 +120,9 @@ const world = (on: On, options: WorldOptions = {}): World => {
       maxTokens: e.maxTokens,
       timeoutMs: e.timeoutMs,
     });
+    // Taken as the request starts, so a later change is the next request's.
+    const reply = result.reply;
+    const delay = result.replyDelayMs;
     const usage = {
       input_tokens: 40,
       output_tokens: 20,
@@ -117,20 +130,28 @@ const world = (on: On, options: WorldOptions = {}): World => {
       cache_creation_input_tokens: 0,
     };
 
+    if (delay > 0) {
+      await clock.sleep(delay);
+    }
+
     return {
       value:
-        result.reply === null
+        reply === null
           ? { isAnswered: false as const, reason: "aborted" as const, usage }
-          : { isAnswered: true as const, text: result.reply, usage },
+          : { isAnswered: true as const, text: reply, usage },
     };
   });
   on("fs.exists", (_, e) => {
     result.touched.push(e.path);
 
-    return { value: result.files.has(e.path) };
+    return { value: result.files.has(e.path) || unreadable.has(e.path) };
   });
   on("fs.read", (_, e) => {
     result.touched.push(e.path);
+    if (unreadable.has(e.path)) {
+      return { deny: "EACCES" };
+    }
+
     const text = result.files.get(e.path);
 
     return text === undefined ? { deny: "ENOENT" } : { value: text };
@@ -147,7 +168,10 @@ const world = (on: On, options: WorldOptions = {}): World => {
     }
 
     result.writes.push({ path: e.path, text: e.text });
-    result.files.set(e.path, e.text);
+
+    if (options.isWriteLost !== true) {
+      result.files.set(e.path, e.text);
+    }
 
     return { value: undefined };
   });
@@ -463,34 +487,43 @@ test("an empty section gets the line after its heading, one blank line between",
 });
 
 test("a missing section is added at the end, one blank line before it", async ($, on) => {
-  const cases: [string, string][] = [
+  // Each round saves a different rule: the one just saved is not offered again.
+  const rules = [
+    "Run the linter before every commit",
+    "Prefer early returns over nested conditions",
+    "Write commit messages in English",
+    "Keep database migrations reversible",
+  ];
+  const cases: [string, (rule: string) => string][] = [
     [
       "# Notes\n\n- one\n",
-      `# Notes\n\n- one\n\n## Rules from corrections\n\n- ${RULE} (added ${DATE})\n`,
+      (rule) => `# Notes\n\n- one\n\n## Rules from corrections\n\n- ${rule} (added ${DATE})\n`,
     ],
     [
       "# Notes",
-      `# Notes\n\n## Rules from corrections\n\n- ${RULE} (added ${DATE})\n`,
+      (rule) => `# Notes\n\n## Rules from corrections\n\n- ${rule} (added ${DATE})\n`,
     ],
     [
       "# Notes\n\n",
-      `# Notes\n\n## Rules from corrections\n\n- ${RULE} (added ${DATE})\n`,
+      (rule) => `# Notes\n\n## Rules from corrections\n\n- ${rule} (added ${DATE})\n`,
     ],
     // A heading inside a code block is not the section.
     [
       "```md\n## Rules from corrections\n```\n",
-      `\`\`\`md\n## Rules from corrections\n\`\`\`\n\n## Rules from corrections\n\n- ${RULE} (added ${DATE})\n`,
+      (rule) => `\`\`\`md\n## Rules from corrections\n\`\`\`\n\n## Rules from corrections\n\n- ${rule} (added ${DATE})\n`,
     ],
   ];
   const engine = world(on);
   await completeTurn($, ANSWER);
 
-  for (const [before, after] of cases) {
+  for (const [index, [before, after]] of cases.entries()) {
+    const rule = rules[index] ?? RULE;
     engine.files.set(PROJECT_FILE, before);
     engine.writes.length = 0;
+    engine.reply = verdict(rule);
     await typePrompt($, engine);
     await press($, "save-project");
-    expect(engine.writes).toEqual([{ path: PROJECT_FILE, text: after }]);
+    expect(engine.writes).toEqual([{ path: PROJECT_FILE, text: after(rule) }]);
   }
 });
 
@@ -793,4 +826,89 @@ test("hooks pass events through unchanged", async ($, on) => {
       resume: {} as never,
     }),
   ).toEqual({ sessionId: "s2" });
+});
+
+test("an older check answering late does not replace a newer lesson", async ($, on) => {
+  const engine = world(on);
+  await completeTurn($, ANSWER);
+  engine.reply = verdict(RULE);
+  engine.replyDelayMs = 1000;
+  await typePrompt($, engine);
+  engine.reply = verdict("Prefer early returns over nested conditions");
+  engine.replyDelayMs = 0;
+  await typePrompt($, engine, "Use early returns, not nested ifs.");
+  await engine.advance(1000);
+
+  expect(engine.models.length).toBe(2);
+
+  for (const surface of SURFACES) {
+    await onBand($, surface, async (ui) => {
+      expect((await ui.find({ type: "Text", text: /Lesson/ }))?.text).toBe(
+        "✎ Lesson: Prefer early returns over nested conditions",
+      );
+    });
+  }
+});
+
+test("a near-duplicate of the rule just saved is not offered, even unseen in the file", async ($, on) => {
+  const engine = world(on, { isWriteLost: true });
+  await toLesson($, engine);
+  await press($, "save-project");
+  expect(engine.writes.length).toBe(1);
+
+  engine.reply = verdict("Always run the linter before every commit");
+  await typePrompt($, engine);
+
+  await expectNoRow($);
+});
+
+test("an existing file that cannot be read is never written", async ($, on) => {
+  const engine = world(on, { unreadable: [PROJECT_FILE] });
+  await toLesson($, engine);
+  await press($, "save-project");
+
+  expect(engine.writes).toEqual([]);
+  expect(engine.toasts.length).toBe(1);
+  expect(engine.toasts[0]?.startsWith("Could not save the rule: ")).toBe(true);
+  expect(engine.toasts[0]).toContain("EACCES");
+  await onBand($, "terminal", async (ui) => {
+    expect((await ui.find({ type: "Text", text: /Lesson/ }))?.text).toBe(
+      `✎ Lesson: ${RULE}`,
+    );
+  });
+});
+
+test("the side request gets the prompt as the chain settled it", async ($, on) => {
+  const engine = world(on, { enteredText: "Never commit to the [masked] branch." });
+  await toLesson($, engine);
+
+  expect(engine.models[0]?.prompt).toBe(
+    `Assistant's previous answer (end):\n${ANSWER}\n\nMessage:\nNever commit to the [masked] branch.`,
+  );
+});
+
+test("the inserted line takes the line break of the line it follows", async ($, on) => {
+  // Windows breaks above the section, Unix breaks inside it.
+  const before =
+    "# Notes\r\n\r\n## Rules from corrections\n\n- Use tabs\n\n## Next\r\n";
+  const engine = world(on, { files: { [PROJECT_FILE]: before } });
+  await toLesson($, engine);
+  await press($, "save-project");
+
+  expect(engine.writes[0]?.text).toBe(
+    `# Notes\r\n\r\n## Rules from corrections\n\n- Use tabs\n- ${RULE} (added ${DATE})\n\n## Next\r\n`,
+  );
+});
+
+test("code blocks and thematic breaks in the section are no list items", async ($, on) => {
+  const before =
+    "## Rules from corrections\n\n- Use tabs\n\n```\n- run the linter before every commit\n## not a heading\n```\n\n* * *\n\nTrailing note.\n";
+  const engine = world(on, { files: { [PROJECT_FILE]: before } });
+  // The fenced line looks like the rule, but is not a saved rule.
+  await toLesson($, engine);
+  await press($, "save-project");
+
+  expect(engine.writes[0]?.text).toBe(
+    `## Rules from corrections\n\n- Use tabs\n- ${RULE} (added ${DATE})\n\n\`\`\`\n- run the linter before every commit\n## not a heading\n\`\`\`\n\n* * *\n\nTrailing note.\n`,
+  );
 });

@@ -67,6 +67,9 @@ let sessionEpoch = 0;
 // a check landing meanwhile does not replace the lesson under the person.
 let isSavingNow = false;
 let isEditingNow = false;
+// The rule saved last: a check that ran while it was being written may not
+// have seen it in the file, so a near-duplicate of it is dropped too.
+let lastSavedRule: string | null = null;
 
 /** The maxLength option, or 400 when missing, not a number or below 40. */
 const readMaxLength = (options: PluginOptions | undefined): number => {
@@ -185,9 +188,10 @@ const isNearDuplicate = (first: string, second: string): boolean => {
   return shared / union.size >= DUPLICATE_OVERLAP;
 };
 
-type Line = { text: string; end: number; hasBreak: boolean };
+/** One line of a file: its text without the break, the break itself ("" on a last line without one), and the offset just past it. */
+type Line = { text: string; eol: string; end: number };
 
-/** The file's lines, each with the offset just past its line break. */
+/** The file's lines, each with its own line break. */
 const splitLines = (text: string): Line[] => {
   const lines: Line[] = [];
   let start = 0;
@@ -195,10 +199,12 @@ const splitLines = (text: string): Line[] => {
   while (start < text.length) {
     const lineBreak = text.indexOf("\n", start);
     const stop = lineBreak === -1 ? text.length : lineBreak;
+    const raw = text.slice(start, stop);
+    const isCrlf = lineBreak !== -1 && raw.endsWith("\r");
     lines.push({
-      text: text.slice(start, stop).replace(/\r$/, ""),
+      text: isCrlf ? raw.slice(0, -1) : raw,
+      eol: lineBreak === -1 ? "" : isCrlf ? "\r\n" : "\n",
       end: lineBreak === -1 ? text.length : lineBreak + 1,
-      hasBreak: lineBreak !== -1,
     });
     start = lineBreak === -1 ? text.length : lineBreak + 1;
   }
@@ -206,29 +212,65 @@ const splitLines = (text: string): Line[] => {
   return lines;
 };
 
+/** The line break of the line at `index`, or of the nearest one before it that has one. */
+const lineBreakNear = (lines: Line[], index: number): string => {
+  for (let i = index; i >= 0; i--) {
+    const eol = lines[i]?.eol ?? "";
+
+    if (eol !== "") {
+      return eol;
+    }
+  }
+
+  return "\n";
+};
+
 const FENCE = /^\s{0,3}(```|~~~)/;
 const LIST_ITEM = /^[-*+]\s+(.*)$/;
+// `* * *`, `---`, `- - -`: a thematic break, never a list item.
+const THEMATIC_BREAK = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
+
+/** The item's text when the line is a top-level list item, else null. */
+const listItem = (text: string): string | null => {
+  if (THEMATIC_BREAK.test(text)) {
+    return null;
+  }
+
+  return LIST_ITEM.exec(text)?.[1] ?? null;
+};
+
+/**
+ * Whether each line is code: a fence line or a line between fences. Code is
+ * never a heading or a list item.
+ */
+const codeLines = (lines: Line[]): boolean[] => {
+  let isInFence = false;
+
+  return lines.map((line) => {
+    if (FENCE.test(line.text)) {
+      isInFence = !isInFence;
+
+      return true;
+    }
+
+    return isInFence;
+  });
+};
 
 /**
  * Where `## Rules from corrections` stands: its heading line and the line that
- * ends it (the next `#` or `##` heading, or the end). Lines inside code fences
- * are never headings.
+ * ends it (the next `#` or `##` heading, or the end).
  */
 const findSection = (
   lines: Line[],
+  isCode: boolean[],
 ): { heading: number; end: number } | null => {
-  let isInFence = false;
   let heading = -1;
 
   for (let i = 0; i < lines.length; i++) {
     const text = lines[i]?.text ?? "";
 
-    if (FENCE.test(text)) {
-      isInFence = !isInFence;
-      continue;
-    }
-
-    if (isInFence) {
+    if (isCode[i] === true) {
       continue;
     }
 
@@ -247,7 +289,8 @@ const findSection = (
 /** The rules already listed in the file's section. */
 const sectionRules = (text: string): string[] => {
   const lines = splitLines(text);
-  const section = findSection(lines);
+  const isCode = codeLines(lines);
+  const section = findSection(lines, isCode);
 
   if (section === null) {
     return [];
@@ -256,10 +299,10 @@ const sectionRules = (text: string): string[] => {
   const rules: string[] = [];
 
   for (let i = section.heading + 1; i < section.end; i++) {
-    const match = LIST_ITEM.exec(lines[i]?.text ?? "");
+    const item = isCode[i] === true ? null : listItem(lines[i]?.text ?? "");
 
-    if (match?.[1] !== undefined) {
-      rules.push(match[1]);
+    if (item !== null) {
+      rules.push(item);
     }
   }
 
@@ -269,27 +312,31 @@ const sectionRules = (text: string): string[] => {
 /**
  * The file with `line` added as the last list line of the section, or the
  * section added at the end. Every byte of the file is kept; only new bytes
- * are inserted, with the file's own line break.
+ * are inserted, with the line break of the line they follow.
  */
 const insertRule = (text: string, line: string): string => {
-  const eol = text.includes("\r\n") ? "\r\n" : "\n";
   const lines = splitLines(text);
-  const section = findSection(lines);
+  const isCode = codeLines(lines);
+  const section = findSection(lines, isCode);
 
   if (section === null) {
+    const last = lines[lines.length - 1];
+
+    if (last === undefined) {
+      return `${SECTION_HEADING}\n\n${line}\n`;
+    }
+
+    const eol = lineBreakNear(lines, lines.length - 1);
     const block = `${SECTION_HEADING}${eol}${eol}${line}${eol}`;
 
-    if (text === "") {
-      return block;
+    if (last.eol === "") {
+      return `${text}${eol}${eol}${block}`;
     }
 
-    if (text.endsWith(`${eol}${eol}`)) {
-      return `${text}${block}`;
-    }
-
-    return text.endsWith("\n")
-      ? `${text}${eol}${block}`
-      : `${text}${eol}${eol}${block}`;
+    // A blank last line already gives the one blank line before the heading.
+    return last.text.trim() === ""
+      ? `${text}${block}`
+      : `${text}${eol}${block}`;
   }
 
   // The last list item, with any indented lines that continue it.
@@ -298,7 +345,11 @@ const insertRule = (text: string, line: string): string => {
   for (let i = section.heading + 1; i < section.end; i++) {
     const current = lines[i]?.text ?? "";
 
-    if (LIST_ITEM.test(current)) {
+    if (isCode[i] === true) {
+      continue;
+    }
+
+    if (listItem(current) !== null) {
       anchor = i;
     } else if (anchor === i - 1 && /^\s+\S/.test(current)) {
       anchor = i;
@@ -325,10 +376,10 @@ const insertRule = (text: string, line: string): string => {
     return text;
   }
 
+  const eol = lineBreakNear(lines, anchor);
   const blank = isBlankNeeded ? eol : "";
-  const insert = after.hasBreak
-    ? `${blank}${line}${eol}`
-    : `${eol}${blank}${line}${eol}`;
+  const insert =
+    after.eol !== "" ? `${blank}${line}${eol}` : `${eol}${blank}${line}${eol}`;
 
   return `${text.slice(0, after.end)}${insert}${text.slice(after.end)}`;
 };
@@ -433,7 +484,8 @@ const runCheck = async (
       epoch !== sessionEpoch ||
       seq <= appliedSeq ||
       isSavingNow ||
-      isEditingNow
+      isEditingNow ||
+      (lastSavedRule !== null && isNearDuplicate(lastSavedRule, lesson.rule))
     ) {
       return current;
     }
@@ -492,6 +544,7 @@ const pressSave = async ($: Engine, target: Target): Promise<void> => {
 
     const line = `- ${lesson.rule} (added ${formatDate(await $.clock.now())})`;
     await $.fs.write(path, insertRule(text, line));
+    lastSavedRule = lesson.rule;
     $.ui.toast(TEXT_SAVED[target]);
     await clearLesson($);
   } catch (error) {
@@ -554,18 +607,23 @@ export const register: Register = (on, options) => {
   // Only a short prompt the person typed, after an answer, is checked; the
   // check runs after the prompt has entered and never holds it up.
   on("prompt.submit", async ($, e, next) => {
-    const prompt = e.text.trim();
     const answer = lastAnswer;
-    const isChecked =
+    const isCandidate =
       e.origin.kind === "composer" &&
       e.isMeta !== true &&
       e.command === undefined &&
-      prompt.length >= 1 &&
-      prompt.length <= maxLength &&
       answer !== null;
     const result = await next(e);
 
-    if (isChecked && answer !== null && result.drop === undefined) {
+    if (!isCandidate || answer === null || result.drop !== undefined) {
+      return result;
+    }
+
+    // What the chain settled to, so a prompt another mod masked on its way
+    // down is sent masked; the raw text only when the chain gave none.
+    const prompt = (typeof result.text === "string" ? result.text : e.text).trim();
+
+    if (prompt.length >= 1 && prompt.length <= maxLength) {
       checkSeq += 1;
       const seq = checkSeq;
       const epoch = sessionEpoch;
