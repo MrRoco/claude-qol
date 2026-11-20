@@ -77,6 +77,9 @@ const pendingCalls = new Map<string, PendingCall>();
 const serverByTool = new Map<string, string>();
 // The `<server>` part of `mcp__<server>__<tool>` → that same server name.
 const serverByPrefix = new Map<string, string>();
+// The last command run, until a skill prompt of the same name claims it: a
+// `/name` skill raises both, and is listed once, as a skill.
+let lastCommand: string | undefined;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -248,6 +251,12 @@ const bumpFile = (
   );
 };
 
+/** Takes one back from a count, dropping a name that reaches zero. */
+const dropName = (list: readonly NameCount[], name: string): NameCount[] =>
+  list
+    .map((one) => (one.name === name ? { ...one, count: one.count - 1 } : one))
+    .filter((one) => one.count > 0);
+
 /** Adds the files not listed yet; an instruction file's text is never kept. */
 const mergeContextFiles = (
   list: readonly ContextFile[],
@@ -266,6 +275,7 @@ const mergeContextFiles = (
 
 const resetAll = async ($: Engine): Promise<void> => {
   pendingCalls.clear();
+  lastCommand = undefined;
   await update($, connectorsAtom, () => []);
   await update($, filesAtom, () => []);
   await update($, skillsAtom, () => []);
@@ -507,6 +517,7 @@ export const register: Register = (on) => {
   // the new one.
   on("command.run", async ($, e, next) => {
     const name = e.command;
+    lastCommand = name;
     await safely(() => update($, commandsAtom, (list) => bumpName(list, name)));
 
     return next(e);
@@ -546,8 +557,22 @@ export const register: Register = (on) => {
       }
     }
 
+    // A `/name` run of this skill was counted as a command just before:
+    // decided here in one synchronous step, then moved over to skills.
+    const isFromCommand = !isCounted && lastCommand === name;
+
+    if (isFromCommand) {
+      lastCommand = undefined;
+    }
+
     if (!isCounted) {
       await safely(() => update($, skillsAtom, (list) => bumpName(list, name)));
+    }
+
+    if (isFromCommand) {
+      await safely(() =>
+        update($, commandsAtom, (list) => dropName(list, name)),
+      );
     }
 
     return next(e);
@@ -686,7 +711,7 @@ export const register: Register = (on) => {
       const lead = `${isOpen ? "▾" : "▸"} ${entry.server}  ${callsText(entry.calls)}`;
 
       return (
-        <Box flexDirection="column">
+        <Box key={`row:${entry.server}`} flexDirection="column">
           <Button
             key={`connector:${entry.server}`}
             onPress={() => void toggleConnector($, entry.server)}

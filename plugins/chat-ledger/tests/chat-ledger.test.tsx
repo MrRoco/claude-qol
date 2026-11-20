@@ -38,7 +38,10 @@ type World = {
  * Stands in for the engine beneath the mod: each hook answers as the engine
  * would and records what the mod asked for.
  */
-const world = (on: On, { isCopied = true } = {}): World => {
+const world = (
+  on: On,
+  { isCopied = true, isStoreDown = false } = {},
+): World => {
   const result: World = { opened: [], copied: [], toasts: [], stateWrites: [] };
 
   on("command.register", () => ({ value: { command: "ledger" } }));
@@ -71,6 +74,10 @@ const world = (on: On, { isCopied = true } = {}): World => {
   });
   on("state.set", async (_, e, next) => {
     result.stateWrites.push(JSON.stringify(e));
+
+    if (isStoreDown) {
+      throw new Error("store down");
+    }
 
     return next(e);
   });
@@ -632,6 +639,96 @@ test("hooks hand every event on unchanged and never deny", async ($, on) => {
       isInteractive: true,
     }),
   ).toEqual({ cwd: ROOT });
+  expect(
+    await $.session.end({
+      reason: "clear",
+      sessionId: "s1",
+      resume: {} as never,
+    }),
+  ).toEqual({ sessionId: "s1" });
+});
+
+test("a skill run by /name is listed once, as a skill", async ($, on) => {
+  const engine = world(on);
+  const prompt = (skill: string) =>
+    $.skill.prompt({
+      skill,
+      text: "Do it",
+      frontmatter: {},
+      source: "userSettings",
+    });
+
+  // A `/name` skill raises the command and then the skill's prompt.
+  await $.command.run({ ...LEDGER, command: "commit" });
+  await prompt("commit");
+  // A plain command stays a command; a later prompt of another skill does
+  // not take it back.
+  await $.command.run({ ...LEDGER, command: "compact" });
+  await prompt("review");
+
+  expect(await exported($, engine)).toContain(
+    [
+      "## Skills and commands (3)",
+      "",
+      "- /compact (command): 1×",
+      "- commit (skill): 1×",
+      "- review (skill): 1×",
+    ].join("\n"),
+  );
+});
+
+test("a state write that fails leaves every event to pass on", async ($, on) => {
+  // Every write of the mod's state fails.
+  const engine = world(on, { isStoreDown: true });
+
+  expect(await $.command.run({ ...LEDGER, command: "compact" })).toEqual({
+    text: "ran",
+  });
+  expect(
+    await $.skill.prompt({
+      skill: "commit",
+      text: "Commit it",
+      frontmatter: {},
+      source: "plugin",
+    }),
+  ).toEqual({ text: "Commit it" });
+  const blocks = [{ name: "claudeMd", text: "rules" }];
+  expect(
+    await $.prompt.context({
+      blocks,
+      instructionFiles: [
+        { path: `${ROOT}/CLAUDE.md`, kind: "project", content: "rules" },
+      ],
+    }),
+  ).toMatchObject({ blocks });
+
+  const useBlock = {
+    type: "tool_use",
+    id: "toolu_f1",
+    name: "mcp__jira__get_issue",
+    input: {},
+  };
+  const resultBlock = {
+    type: "tool_result",
+    tool_use_id: "toolu_f1",
+    content: "ok",
+  };
+  const asked = await $.session.append({
+    message: { type: "assistant", role: "assistant", content: [useBlock] },
+    door: "response",
+    origin: { kind: "model", model: "claude" },
+    uuid: "row-f1",
+  } as never);
+  const answered = await $.session.append({
+    message: { type: "user", role: "user", content: [resultBlock] },
+    door: "tool-result",
+    origin: { kind: "tool", tool: "mcp__jira__get_issue" },
+    uuid: "row-f2",
+  } as never);
+  expect(asked).toMatchObject({ message: { content: [useBlock] } });
+  expect(answered).toMatchObject({ message: { content: [resultBlock] } });
+  // The writes were tried, and failed, on the way.
+  expect(engine.stateWrites.length).toBeGreaterThan(0);
   expect(
     await $.session.end({
       reason: "clear",

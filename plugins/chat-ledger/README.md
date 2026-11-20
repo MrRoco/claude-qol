@@ -47,6 +47,9 @@ session ends. It only reaches your clipboard when you press **Copy as Markdown**
   security plugin such as `cc-plugin-sec-default` may skip these hooks until the mod is
   approved for it. Until then the context files list stays empty and skills run by `/name`
   are not counted (skills Claude loads itself still are).
+- **Skills run by `/name`.** Such a run is listed once, as a skill, when the skill loads right
+  after its command. A skill that loads only after another command has run in between is also
+  listed as a command.
 - **Created or edited.** A write to a file the ledger has not seen yet counts as `created`;
   the mod does not look at the disk, so overwriting an existing file you had not read first
   also shows as created.
