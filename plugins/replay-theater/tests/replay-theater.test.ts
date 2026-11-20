@@ -1,5 +1,5 @@
 import { expect, test } from "claude-code/testing";
-import type { Engine, Mounted } from "claude-code/testing";
+import type { Engine, Mounted, Plugin } from "claude-code/testing";
 import type { On } from "claude-code";
 
 const SURFACES = ["terminal", "desktop"] as const;
@@ -450,3 +450,69 @@ test("a later turn without edits keeps the last replay; a new turn with edits re
     );
   });
 });
+
+test("an edit without line changes says so", async ($, on) => {
+  world(on);
+  await $.turn.start({ text: "go", turnId: "t1" });
+  await $.tool.call({
+    tool: "Edit",
+    file_path: `${ROOT}/a.ts`,
+    old_string: "",
+    new_string: "",
+  });
+  await completeTurn($, "t1");
+  await $.command.run(REPLAY);
+
+  for (const surface of SURFACES) {
+    await onPane($, surface, async (ui) => {
+      const empty = (await exact(ui, "  (no line changes)"))[0];
+      expect(empty?.props.dimColor).toBe(true);
+      expect((await exact(ui, "+0"))[0]).toBeDefined();
+      expect((await exact(ui, "-0"))[0]).toBeDefined();
+    });
+  }
+});
+
+// The test kit's `$` has no `ui.close`, so an inline plugin closes the pane,
+// as the person's Escape would: the mod hears it through its `ui.close` hook.
+const CLOSER = {
+  name: "pane-closer",
+  register(on) {
+    on("session.start", async ($, e, next) => {
+      const started = await next(e);
+      // A literal id: the inline plugin runs on its own, without this file's constants.
+      await $.ui.close({ id: "replay-theater" });
+
+      return started;
+    });
+  },
+} satisfies Plugin;
+
+test(
+  "a close from outside the pane brings the hint back",
+  { plugins: [CLOSER] },
+  async ($, on) => {
+    const engine = world(on, { files: FILES });
+    await threeEditTurn($);
+    await $.command.run(REPLAY);
+
+    await onBand($, "terminal", async (ui) => {
+      expect(await ui.keepsBeneath()).toBe(true);
+    });
+
+    await $.session.start({
+      cwd: ROOT,
+      surface: "terminal",
+      isInteractive: true,
+    });
+
+    expect(engine.closed).toEqual([PANE_ID]);
+    for (const surface of SURFACES) {
+      await onBand($, surface, async (ui) => {
+        expect((await ui.find({ type: "Text", text: /file edit/ }))?.text).toBe(
+          "▶ 3 file edits in the last turn",
+        );
+      });
+    }
+  },
+);
