@@ -44,6 +44,11 @@
       "name": "privacy-mask",
       "source": "./plugins/privacy-mask",
       "description": "Masks emails, phone numbers, amounts, IBANs, secrets and listed names on screen while you record"
+    },
+    {
+      "name": "mod-switch",
+      "source": "./plugins/mod-switch",
+      "description": "A Mods pane to turn every installed mod on or off, with named sets"
     }
   ]
 }

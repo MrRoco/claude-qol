@@ -61,3 +61,4 @@ scripts/check.sh                       # validate the marketplace and every mod,
 - `.plan/phase4-contract.md` — prompt-shaper
 - `.plan/phase8-contract.md` — replay-theater
 - `.plan/phase7-contract.md` — privacy-mask
+- `.plan/phase9-contract.md` — mod-switch
