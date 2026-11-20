@@ -18,8 +18,6 @@ export type ModRow = {
   scope: ModScope | null;
   isOn: boolean;
   lock: ModLock | null;
-  /** last problem seen for it in this session; the host offers no source yet */
-  problem: string | null;
 };
 
 declare module "claude-code" {
@@ -35,7 +33,6 @@ declare module "claude-code" {
         scope: "user" | "project" | "local" | "session" | null;
         isOn: boolean;
         lock: "managed" | "session" | "self" | "ambiguous" | null;
-        problem: string | null;
       }[];
       isLoading: boolean;
       /** a switch happened since this session loaded its plugins */

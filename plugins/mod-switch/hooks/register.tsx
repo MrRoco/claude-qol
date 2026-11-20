@@ -329,7 +329,6 @@ export const buildRows = (
       scope,
       isOn,
       lock: lockFor(name, scope, isManaged, isAmbiguous),
-      problem: null,
     });
   }
 
@@ -358,7 +357,6 @@ export const buildRows = (
       scope,
       isOn: true,
       lock: lockFor(name, scope, saw.isManaged),
-      problem: null,
     });
   }
 
@@ -922,11 +920,6 @@ export const register: Register = (on) => {
               {control}
             </Box>
           </Box>
-          {row.problem !== null && (
-            <Text color={DANGER} wrap="truncate-end">
-              {row.problem}
-            </Text>
-          )}
         </Box>
       );
     });

@@ -340,7 +340,6 @@ test("buildRows merges plugin.register: a module seen, the organization's, a --p
     scope: "user",
     isOn: false,
     lock: null,
-    problem: null,
   });
 });
 
