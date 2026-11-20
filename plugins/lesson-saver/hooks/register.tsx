@@ -1,5 +1,10 @@
 import { atom, read, update } from "claude-code";
-import type { EngineInterface, PluginOptions, Register } from "claude-code";
+import type {
+  EngineInterface,
+  PluginOptions,
+  Register,
+  RenderElement,
+} from "claude-code";
 
 import type { Target } from "../types";
 
@@ -22,6 +27,7 @@ const SECTION_HEADING = `## ${SECTION_TITLE}`;
 
 // Theme keys only, never fixed colours.
 const ACCENT = "claude";
+const HEADER = "✎ New lesson";
 
 const SYSTEM = `You decide whether a message corrects an AI coding assistant in a way that should become a
 lasting rule. A lasting rule is a preference, convention or mistake to avoid that applies
@@ -666,44 +672,54 @@ export const register: Register = (on, options) => {
       onPress: () => void,
       isPrimary = false,
     ) => (
-      <Box flexShrink={0} marginLeft={1}>
-        <Button
-          key={key}
-          label={label}
-          {...(isPrimary ? { variant: "primary" as const } : {})}
-          onPress={onPress}
-        />
+      <Button
+        key={key}
+        label={label}
+        {...(isPrimary ? { variant: "primary" as const } : {})}
+        onPress={onPress}
+      />
+    );
+    // One card for every state, so the offer stands apart from the chat. No
+    // background colour: terminal backgrounds drew patchy. The header sits on
+    // the first line because a Box border carries no title.
+    const card = (...body: RenderElement[]) => (
+      <Box
+        flexDirection="column"
+        width={columns}
+        borderStyle="round"
+        borderColor={ACCENT}
+        paddingX={1}
+      >
+        <Text color={ACCENT} weight="bold">
+          {HEADER}
+        </Text>
+        {body}
+      </Box>
+    );
+    // Buttons wrap onto a next line when the card is narrow.
+    const buttonRow = (...buttons: RenderElement[]) => (
+      <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
+        {buttons}
       </Box>
     );
 
     if (await read($, savingAtom)) {
-      return (
-        <Box flexDirection="row" width={columns}>
-          <Box flexShrink={0}>
-            <Text color={ACCENT}>✎ Saving…</Text>
-          </Box>
-        </Box>
-      );
+      return card(<Text dimColor>Saving…</Text>);
     }
 
     if (await read($, editingAtom)) {
-      return (
-        <Box flexDirection="row" width={columns}>
-          <Box flexShrink={0} marginRight={1}>
-            <Text color={ACCENT}>✎</Text>
-          </Box>
-          <Box flexGrow={1} flexShrink={1}>
-            <Input
-              key="rule"
-              value={lesson.rule}
-              rows={2}
-              autoFocus
-              submitLabel="keep"
-              onSubmit={(value) => void submitEdit($, value)}
-            />
-          </Box>
-          {button("cancel-edit", "Cancel edit", () => void pressCancelEdit($))}
-        </Box>
+      return card(
+        <Input
+          key="rule"
+          value={lesson.rule}
+          rows={2}
+          autoFocus
+          submitLabel="keep"
+          onSubmit={(value) => void submitEdit($, value)}
+        />,
+        buttonRow(
+          button("cancel-edit", "Cancel edit", () => void pressCancelEdit($)),
+        ),
       );
     }
 
@@ -723,18 +739,14 @@ export const register: Register = (on, options) => {
     };
     const other: Target = lesson.suggested === "project" ? "global" : "project";
 
-    return (
-      <Box flexDirection="row" width={columns}>
-        <Box flexShrink={1}>
-          <Text color={ACCENT} wrap="truncate-end">
-            {`✎ Lesson: ${lesson.rule}`}
-          </Text>
-        </Box>
-        {saveButtons[lesson.suggested]}
-        {saveButtons[other]}
-        {button("edit", "Edit", () => void pressEdit($))}
-        {button("skip", "Skip", () => void pressSkip($))}
-      </Box>
+    return card(
+      <Text wrap="wrap">{lesson.rule}</Text>,
+      buttonRow(
+        saveButtons[lesson.suggested],
+        saveButtons[other],
+        button("edit", "Edit", () => void pressEdit($)),
+        button("skip", "Skip", () => void pressSkip($)),
+      ),
     );
   });
 };

@@ -6,11 +6,11 @@ Turns the corrections you give Claude into rules it keeps, without you writing t
   (not part of the chat) reads the end of Claude's previous answer and your prompt, and decides
   whether you corrected Claude in a way that should hold beyond this task: a preference, a
   convention or a mistake to avoid. One-off instructions, questions and approvals are ignored.
-- **Drafts one rule.** When it is such a correction, a row above the prompt shows the drafted
-  rule (`✎ Lesson: …`) with **Save to project**, **Save globally**, **Edit** and **Skip**. The
-  button for the file the check thinks fits best comes first.
+- **Drafts one rule.** When it is such a correction, a bordered card above the prompt, headed
+  `✎ New lesson`, shows the drafted rule with **Save to project**, **Save globally**, **Edit**
+  and **Skip** below it. The button for the file the check thinks fits best comes first.
 - **You decide.** Nothing is written until you press Save. **Edit** opens the rule in a text
-  field in the row; Enter keeps your version. **Skip** drops it.
+  field in the card; Enter keeps your version. **Skip** drops it.
 - **No repeats.** A rule close to one already saved (in either file) is not offered again, and
   saving a near-duplicate tells you so instead of writing it.
 

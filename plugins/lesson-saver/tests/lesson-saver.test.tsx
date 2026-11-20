@@ -243,6 +243,34 @@ const expectNoRow = async ($: Engine) => {
 const buttonKeys = async (ui: Mounted<Surface, "AbovePrompt">) =>
   (await ui.findAll({ type: "Button" })).map((one) => one.key);
 
+const HEADER = "✎ New lesson";
+
+/** The text line right under the card's header: the rule on offer. */
+const shownRule = async (ui: Mounted<Surface, "AbovePrompt">) => {
+  const texts = await ui.findAll({ type: "Text" });
+  const header = texts.findIndex((one) => one.text === HEADER);
+
+  return header === -1 ? undefined : texts[header + 1]?.text;
+};
+
+/** Every state draws one round card in the theme accent, header first. */
+const expectCard = async (ui: Mounted<Surface, "AbovePrompt">) => {
+  expect(await ui.drawn()).toMatchObject({
+    type: "Box",
+    props: {
+      flexDirection: "column",
+      width: BAND.props.bodyColumns,
+      borderStyle: "round",
+      borderColor: "claude",
+    },
+  });
+  // No background colour anywhere: terminal backgrounds drew patchy.
+  expect(JSON.stringify(await ui.drawn())).not.toContain("backgroundColor");
+  const header = await ui.find({ type: "Text", text: HEADER });
+  expect(header?.props.color).toBe("claude");
+  expect(header?.props.weight).toBe("bold");
+};
+
 test("a typed short prompt after an answer starts one check, after the prompt entered", async ($, on) => {
   const engine = world(on);
   await completeTurn($, ANSWER);
@@ -357,9 +385,18 @@ test("lasting true shows the rule with the suggested target first", async ($, on
 
   for (const surface of SURFACES) {
     await onBand($, surface, async (ui) => {
-      const lead = await ui.find({ type: "Text", text: /Lesson/ });
-      expect(lead?.text).toBe(`✎ Lesson: ${RULE}`);
-      expect(lead?.props.color).toBe("claude");
+      await expectCard(ui);
+      expect(await shownRule(ui)).toBe(RULE);
+      const rule = await ui.find({ type: "Text", text: RULE });
+      expect(rule?.props.wrap).toBe("wrap");
+      // Buttons sit in their own row under the rule, free to wrap.
+      expect(await ui.drawn()).toMatchObject({
+        children: [
+          { type: "Text" },
+          { type: "Text" },
+          { type: "Box", props: { flexDirection: "row", flexWrap: "wrap" } },
+        ],
+      });
       expect(await buttonKeys(ui)).toEqual([
         "save-project",
         "save-global",
@@ -377,9 +414,7 @@ test("lasting true shows the rule with the suggested target first", async ($, on
 
   for (const surface of SURFACES) {
     await onBand($, surface, async (ui) => {
-      expect((await ui.find({ type: "Text", text: /Lesson/ }))?.text).toBe(
-        "✎ Lesson: Write commit messages in English",
-      );
+      expect(await shownRule(ui)).toBe("Write commit messages in English");
       expect(await buttonKeys(ui)).toEqual([
         "save-global",
         "save-project",
@@ -427,8 +462,7 @@ test("JSON around other text is read; a long or multi-line rule is made one line
   await toLesson($, engine);
 
   await onBand($, "terminal", async (ui) => {
-    const text = (await ui.find({ type: "Text", text: /Lesson/ }))?.text ?? "";
-    const rule = text.replace("✎ Lesson: ", "");
+    const rule = (await shownRule(ui)) ?? "";
     expect(rule.endsWith("…")).toBe(true);
     expect(rule.length <= 200).toBe(true);
     expect(rule.startsWith("word0 word1 word2 word3")).toBe(true);
@@ -497,20 +531,24 @@ test("a missing section is added at the end, one blank line before it", async ($
   const cases: [string, (rule: string) => string][] = [
     [
       "# Notes\n\n- one\n",
-      (rule) => `# Notes\n\n- one\n\n## Rules from corrections\n\n- ${rule} (added ${DATE})\n`,
+      (rule) =>
+        `# Notes\n\n- one\n\n## Rules from corrections\n\n- ${rule} (added ${DATE})\n`,
     ],
     [
       "# Notes",
-      (rule) => `# Notes\n\n## Rules from corrections\n\n- ${rule} (added ${DATE})\n`,
+      (rule) =>
+        `# Notes\n\n## Rules from corrections\n\n- ${rule} (added ${DATE})\n`,
     ],
     [
       "# Notes\n\n",
-      (rule) => `# Notes\n\n## Rules from corrections\n\n- ${rule} (added ${DATE})\n`,
+      (rule) =>
+        `# Notes\n\n## Rules from corrections\n\n- ${rule} (added ${DATE})\n`,
     ],
     // A heading inside a code block is not the section.
     [
       "```md\n## Rules from corrections\n```\n",
-      (rule) => `\`\`\`md\n## Rules from corrections\n\`\`\`\n\n## Rules from corrections\n\n- ${rule} (added ${DATE})\n`,
+      (rule) =>
+        `\`\`\`md\n## Rules from corrections\n\`\`\`\n\n## Rules from corrections\n\n- ${rule} (added ${DATE})\n`,
     ],
   ];
   const engine = world(on);
@@ -584,9 +622,7 @@ test("no HOME or no root: nothing is written and the person is told", async ($, 
   ]);
   // The lesson stays on offer.
   await onBand($, "terminal", async (ui) => {
-    expect((await ui.find({ type: "Text", text: /Lesson/ }))?.text).toBe(
-      `✎ Lesson: ${RULE}`,
-    );
+    expect(await shownRule(ui)).toBe(`${RULE}`);
   });
 });
 
@@ -606,8 +642,8 @@ test("a near-duplicate of a saved rule is not offered", async ($, on) => {
   engine.reply = verdict("Prefer early returns over nested conditions");
   await typePrompt($, engine);
   await onBand($, "terminal", async (ui) => {
-    expect((await ui.find({ type: "Text", text: /Lesson/ }))?.text).toBe(
-      "✎ Lesson: Prefer early returns over nested conditions",
+    expect(await shownRule(ui)).toBe(
+      "Prefer early returns over nested conditions",
     );
   });
 });
@@ -641,7 +677,7 @@ test("Edit shows the rule in a field; Enter keeps the edit, which is what is sav
       expect(field?.props.rows).toBe(2);
       expect(field?.props.autoFocus).toBe(true);
       expect(await buttonKeys(ui)).toEqual(["cancel-edit"]);
-      expect((await ui.find({ type: "Text", text: /✎/ }))?.text).toBe("✎");
+      await expectCard(ui);
     });
   }
 
@@ -654,8 +690,8 @@ test("Edit shows the rule in a field; Enter keeps the edit, which is what is sav
 
   for (const surface of SURFACES) {
     await onBand($, surface, async (ui) => {
-      expect((await ui.find({ type: "Text", text: /Lesson/ }))?.text).toBe(
-        "✎ Lesson: Run the linter and the tests before every commit",
+      expect(await shownRule(ui)).toBe(
+        "Run the linter and the tests before every commit",
       );
     });
   }
@@ -673,9 +709,7 @@ test("Cancel edit and an emptied field keep the drafted rule", async ($, on) => 
   await press($, "cancel-edit");
 
   await onBand($, "terminal", async (ui) => {
-    expect((await ui.find({ type: "Text", text: /Lesson/ }))?.text).toBe(
-      `✎ Lesson: ${RULE}`,
-    );
+    expect(await shownRule(ui)).toBe(`${RULE}`);
   });
 
   await press($, "edit");
@@ -683,9 +717,7 @@ test("Cancel edit and an emptied field keep the drafted rule", async ($, on) => 
     await ui.input({ key: "rule", text: "   " });
   });
   await onBand($, "terminal", async (ui) => {
-    expect((await ui.find({ type: "Text", text: /Lesson/ }))?.text).toBe(
-      `✎ Lesson: ${RULE}`,
-    );
+    expect(await shownRule(ui)).toBe(`${RULE}`);
   });
 });
 
@@ -721,9 +753,8 @@ test("while saving the row shows Saving without buttons", async ($, on) => {
 
   for (const surface of SURFACES) {
     await onBand($, surface, async (ui) => {
-      expect((await ui.find({ type: "Text", text: /Saving/ }))?.text).toBe(
-        "✎ Saving…",
-      );
+      await expectCard(ui);
+      expect(await shownRule(ui)).toBe("Saving…");
       expect(await ui.findAll({ type: "Button" })).toHaveLength(0);
     });
   }
@@ -747,9 +778,7 @@ test("a write error keeps the lesson and tells the person", async ($, on) => {
 
   for (const surface of SURFACES) {
     await onBand($, surface, async (ui) => {
-      expect((await ui.find({ type: "Text", text: /Lesson/ }))?.text).toBe(
-        `✎ Lesson: ${RULE}`,
-      );
+      expect(await shownRule(ui)).toBe(`${RULE}`);
       expect(await buttonKeys(ui)).toContain("save-project");
     });
   }
@@ -843,8 +872,8 @@ test("an older check answering late does not replace a newer lesson", async ($, 
 
   for (const surface of SURFACES) {
     await onBand($, surface, async (ui) => {
-      expect((await ui.find({ type: "Text", text: /Lesson/ }))?.text).toBe(
-        "✎ Lesson: Prefer early returns over nested conditions",
+      expect(await shownRule(ui)).toBe(
+        "Prefer early returns over nested conditions",
       );
     });
   }
@@ -872,14 +901,14 @@ test("an existing file that cannot be read is never written", async ($, on) => {
   expect(engine.toasts[0]?.startsWith("Could not save the rule: ")).toBe(true);
   expect(engine.toasts[0]).toContain("EACCES");
   await onBand($, "terminal", async (ui) => {
-    expect((await ui.find({ type: "Text", text: /Lesson/ }))?.text).toBe(
-      `✎ Lesson: ${RULE}`,
-    );
+    expect(await shownRule(ui)).toBe(`${RULE}`);
   });
 });
 
 test("the side request gets the prompt as the chain settled it", async ($, on) => {
-  const engine = world(on, { enteredText: "Never commit to the [masked] branch." });
+  const engine = world(on, {
+    enteredText: "Never commit to the [masked] branch.",
+  });
   await toLesson($, engine);
 
   expect(engine.models[0]?.prompt).toBe(
