@@ -24,7 +24,7 @@ const BAND = {
     isCollapsed: false,
     isWorking: false,
     maxRows: 10,
-    bodyColumns: 100,
+    bodyColumns: 80,
     scroll: { offset: 0, bodyRows: 10 },
     view: {},
   },
@@ -1085,4 +1085,148 @@ test("Cancel while saving ends the run; the row does not move on to choose", asy
   }
 
   expect(hadCancel).toEqual([true, true]);
+});
+
+// Amendment 2: from 100 band columns the row keeps to floor((columns - 1) / 2).
+
+/** Mounts the row at a band width, runs the body, unmounts. */
+const onBandAt = async (
+  $: Engine,
+  surface: (typeof SURFACES)[number],
+  bodyColumns: number,
+  body: (
+    ui: Mounted<(typeof SURFACES)[number], "AbovePrompt">,
+  ) => Promise<void>,
+) => {
+  const ui = await $.ui.mount({
+    ...BAND,
+    surface,
+    props: { ...BAND.props, bodyColumns },
+  });
+  await body(ui);
+  await ui.unmount();
+};
+
+const rowWidth = async (
+  ui: Mounted<(typeof SURFACES)[number], "AbovePrompt">,
+): Promise<unknown> => {
+  const drawn = await ui.drawn();
+
+  return drawn.type === "Box" ? drawn.props?.width : undefined;
+};
+
+test("the offer is compact at half of 120 columns and whole at 80, on every surface", async ($, on) => {
+  world(on);
+  await measure($, 252_400);
+
+  for (const surface of SURFACES) {
+    await onBandAt($, surface, 120, async (ui) => {
+      expect(await rowWidth(ui)).toBe(59);
+      expect((await ui.find({ type: "Text", text: /tokens/ }))?.text).toBe(
+        "◆ Chat at 252k tokens.",
+      );
+      expect(await ui.find({ type: "Button", key: "write" })).toBeDefined();
+      expect(await ui.find({ type: "Button", key: "not-now" })).toBeDefined();
+    });
+    await onBandAt($, surface, 80, async (ui) => {
+      expect(await rowWidth(ui)).toBe(80);
+      expect((await ui.find({ type: "Text", text: /tokens/ }))?.text).toBe(
+        "◆ This chat is at 252k tokens.",
+      );
+    });
+  }
+});
+
+test("the writing strip keeps bar and time at half width; labels shorten only when needed", async ($, on) => {
+  const engine = world(on);
+  await runFresh($, engine);
+  await engine.advance(42_000);
+
+  for (const surface of SURFACES) {
+    // 59 columns: the whole strip fits.
+    await onBandAt($, surface, 120, async (ui) => {
+      expect(await rowWidth(ui)).toBe(59);
+      expect((await ui.find({ type: "Text", text: /①/ }))?.text).toBe(
+        "① Writing ▕",
+      );
+      expect((await ui.find({ type: "Text", text: /②/ }))?.text).toBe(
+        "  ② Saving  ③ Choose",
+      );
+      expect((await ui.find({ type: "Text", text: /0:42/ }))?.text).toBe(
+        "▏ 0:42",
+      );
+      expect(await ui.find({ type: "Button", key: "cancel" })).toBeDefined();
+    });
+    // 49 columns: the step labels give way, bar and time stay.
+    await onBandAt($, surface, 100, async (ui) => {
+      expect(await rowWidth(ui)).toBe(49);
+      expect((await ui.find({ type: "Text", text: /①/ }))?.text).toBe("① ▕");
+      expect((await ui.find({ type: "Text", text: /②/ }))?.text).toBe("  ② ③");
+      expect((await ui.find({ type: "Text", text: /0:42/ }))?.text).toBe(
+        "▏ 0:42",
+      );
+      const cells = (await ui.findAll({ type: "Text", text: /^[█░]+$/ }))
+        .map((one) => one.text)
+        .join("");
+      expect(cells.length).toBe(8);
+      expect(await ui.find({ type: "Button", key: "cancel" })).toBeDefined();
+    });
+    await onBandAt($, surface, 80, async (ui) => {
+      expect(await rowWidth(ui)).toBe(80);
+      expect((await ui.find({ type: "Text", text: /①/ }))?.text).toBe(
+        "① Writing ▕",
+      );
+    });
+  }
+});
+
+test("the choose row shows only the file name at half width, the path at 80", async ($, on) => {
+  const engine = world(on);
+  await toChoose($, engine);
+
+  for (const surface of SURFACES) {
+    await onBandAt($, surface, 120, async (ui) => {
+      // 59 columns less the three buttons (41) leaves 18 for the name.
+      const saved = await ui.find({ type: "Text", text: /✓/ });
+      expect(saved?.text).toBe(`✓ ${BASE}…`);
+      expect(saved?.text.length).toBe(18);
+      expect(saved?.props.color).toBe("success");
+      expect(await ui.find({ type: "Button", key: "fresh" })).toBeDefined();
+      expect(await ui.find({ type: "Button", key: "copy" })).toBeDefined();
+      expect(await ui.find({ type: "Button", key: "cancel" })).toBeDefined();
+    });
+    await onBandAt($, surface, 160, async (ui) => {
+      // 79 columns: the whole name fits, never its folder.
+      expect((await ui.find({ type: "Text", text: /✓/ }))?.text).toBe(
+        `✓ ${BASE}.md`,
+      );
+    });
+    await onBandAt($, surface, 80, async (ui) => {
+      expect((await ui.find({ type: "Text", text: /✓/ }))?.text).toBe(
+        `✓ Saved .claude/handoffs/${BASE}.md`,
+      );
+    });
+  }
+});
+
+test("the failed row clips its error at half width; the buttons stay whole", async ($, on) => {
+  const engine = world(on, { failWrite: "disk full" });
+  await runFresh($, engine);
+  await answerHandoff($, engine);
+  const error =
+    "✗ Could not save the handoff: fresh-start: $.fs.write: disk full";
+
+  for (const surface of SURFACES) {
+    await onBandAt($, surface, 120, async (ui) => {
+      // 59 columns less Copy (9) and Close (10) leaves 40.
+      const shown = await ui.find({ type: "Text", text: /✗/ });
+      expect(shown?.text).toBe(`${error.slice(0, 39)}…`);
+      expect(shown?.props.color).toBe("error");
+      expect(await ui.find({ type: "Button", key: "copy" })).toBeDefined();
+      expect(await ui.find({ type: "Button", key: "close" })).toBeDefined();
+    });
+    await onBandAt($, surface, 80, async (ui) => {
+      expect((await ui.find({ type: "Text", text: /✗/ }))?.text).toBe(error);
+    });
+  }
 });
