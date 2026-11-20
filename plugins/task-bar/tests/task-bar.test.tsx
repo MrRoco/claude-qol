@@ -1854,6 +1854,32 @@ test("at 80 columns the rows stack: top two, the rest, task-bar last, on every s
   }
 });
 
+test("side by side at 120 columns without a task-bar row draws only the top two", async ($, on) => {
+  const received = core(on);
+  const rows = ["cache-timer", "fresh-start"].map(bandRow);
+
+  for (const surface of SURFACES) {
+    received.length = 0;
+    const ui = await $.ui.mount({ ...LIST(rows, 120), surface });
+
+    expect(received.map(plugins)).toEqual([["fresh-start"], ["cache-timer"]]);
+    const drawn = await ui.drawn();
+    expect(drawn).toMatchObject({
+      type: "Box",
+      props: { flexDirection: "column" },
+      children: [
+        {
+          type: "Box",
+          props: { flexDirection: "row", gap: 1 },
+          children: [bandRow("fresh-start").tree, bandRow("cache-timer").tree],
+        },
+      ],
+    });
+    expect(drawn.type === "Box" ? drawn.children?.length : undefined).toBe(1);
+    await ui.unmount();
+  }
+});
+
 test("side by side needs both top rows; one alone stacks on top", async ($, on) => {
   const received = core(on);
 
