@@ -33,7 +33,7 @@ countdown. Nothing is added to the chat. It only runs when you press it, never b
 
 Cost: each press costs about the size of the chat at the cache-read rate, plus a few tokens for
 the ping itself. For a chat of 40k tokens that is a cent or two. The row shows what the last
-press cost (`· kept warm $0.02`), when Claude Code reports a cost.
+press cost (`· kept warm ≈$0.02`) until the next answer, when Claude Code reports a cost.
 
 The button does nothing in the first 10 seconds after an answer, and while a press is still
 running.
@@ -54,6 +54,8 @@ fresh-start's threshold (250,000 tokens unless you changed it in `/config`).
   anyway.
 - After a reload the ticker restarts from the last known time; a Keep warm press that was
   running during the reload is forgotten.
+- The press's cost is the session's cost just before and just after the ping, hence the `≈`:
+  anything else billed in those seconds (a subagent, another mod) is counted in.
 - A press right after `/clear` or before the first answer has nothing to keep warm and only
   shows a toast.
 - Built for Claude Code 2.1.328; unit tests cover the terminal and desktop surfaces.

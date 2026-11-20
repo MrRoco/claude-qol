@@ -450,12 +450,72 @@ test("Keep warm forks once without effort, restarts from the send time and shows
     await onBand($, surface, async (ui) => {
       expect(await textOf(ui, /left/)).toBe("▏ 4:00 left");
       expect(await textOf(ui, /· 5 min/)).toBe(" · 5 min");
-      expect(await textOf(ui, /kept warm/)).toBe(" · kept warm $0.02");
+      expect(await textOf(ui, /kept warm/)).toBe(" · kept warm ≈$0.02");
       expect(
         (await ui.find({ type: "Text", text: /kept warm/ }))?.props.dimColor,
       ).toBe(true);
     });
   }
+
+  expect(engine.toasts).toEqual([]);
+
+  // A newer main answer drops the old press's cost.
+  await step($, engine, READ_ONLY);
+
+  for (const surface of SURFACES) {
+    await onBand($, surface, async (ui) => {
+      expect(await textOf(ui, /left/)).toBe("▏ 5:00 left");
+      expect(await textOf(ui, /kept warm/)).toBeUndefined();
+    });
+  }
+});
+
+test("a ping that answers after /clear writes nothing into the new conversation", async ($, on) => {
+  const engine = world(on);
+  await answer($, engine);
+  await engine.advance(3 * MINUTE);
+  let release = () => {};
+  engine.fork.gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  await onBand($, "terminal", async (ui) => {
+    await ui.press({ key: "keep-warm" });
+  });
+  await $.session.end({ sessionId: "s-1", reason: "clear" } as never);
+  release();
+  await engine.advance(0);
+
+  expect(engine.forks.length).toBe(1);
+  expect(engine.toasts).toEqual([]);
+
+  // The test engine keeps the old state; the countdown is not restarted and
+  // no cost is written.
+  for (const surface of SURFACES) {
+    await onBand($, surface, async (ui) => {
+      expect(await textOf(ui, /left/)).toBe("▏ 57:00 left");
+      expect(await textOf(ui, /kept warm/)).toBeUndefined();
+      expect(await textOf(ui, /Keeping warm/)).toBeUndefined();
+    });
+  }
+});
+
+test("a failed ping after /clear shows no toast", async ($, on) => {
+  const engine = world(on);
+  await answer($, engine);
+  await engine.advance(3 * MINUTE);
+  engine.fork.reply = { isAnswered: false, reason: "empty-reply", usage: ZERO };
+  let release = () => {};
+  engine.fork.gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  await onBand($, "desktop", async (ui) => {
+    await ui.press({ key: "keep-warm" });
+  });
+  await $.session.end({ sessionId: "s-1", reason: "clear" } as never);
+  release();
+  await engine.advance(0);
 
   expect(engine.toasts).toEqual([]);
 });

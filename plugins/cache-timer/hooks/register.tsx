@@ -72,6 +72,9 @@ let isColdDrawn = false;
 let lastTurnCompleteAt: number | null = null;
 // A Keep warm request of this module instance is in flight.
 let isPingInFlight = false;
+// Bumped at every session end (`/clear` among them): a ping that answers
+// after it belongs to the old conversation and writes nothing.
+let conversationEpoch = 0;
 
 const stopTicker = (): void => {
   ticker?.cancel();
@@ -138,8 +141,10 @@ const formatLeft = (ms: number): string => {
 const formatTokens = (tokens: number): string =>
   `${Math.round(tokens / 1000)}k`;
 
+// `≈`: the session's cost before and after the ping, so other spend in the
+// same seconds (a subagent, another mod) can be counted in.
 const formatCost = (usd: number): string =>
-  usd < 0.01 ? "<$0.01" : `$${usd.toFixed(2)}`;
+  usd < 0.01 ? "≈<$0.01" : `≈$${usd.toFixed(2)}`;
 
 const readCost = async ($: Engine): Promise<number | null> => {
   try {
@@ -208,25 +213,33 @@ const toastFailure = (
  * Taken in one synchronous update, so two presses send one request.
  */
 const pressKeepWarm = async ($: Engine): Promise<void> => {
-  const now = await $.clock.now();
   let isClaimed = false;
-  await update($, warmingAtom, (warming) => {
-    const isTooSoon =
-      lastTurnCompleteAt !== null && now - lastTurnCompleteAt < SETTLE_MS;
 
-    if (warming || isPingInFlight || isTooSoon) {
-      return warming;
-    }
+  try {
+    const now = await $.clock.now();
+    await update($, warmingAtom, (warming) => {
+      const isTooSoon =
+        lastTurnCompleteAt !== null && now - lastTurnCompleteAt < SETTLE_MS;
 
-    isClaimed = true;
-    isPingInFlight = true;
+      if (warming || isPingInFlight || isTooSoon) {
+        return warming;
+      }
 
-    return true;
-  });
+      isClaimed = true;
+      isPingInFlight = true;
+
+      return true;
+    });
+  } catch {
+    // Nothing was sent; the press is simply lost.
+  }
 
   if (!isClaimed) {
     return;
   }
+
+  const epoch = conversationEpoch;
+  const isCurrent = (): boolean => epoch === conversationEpoch;
 
   try {
     const sentAt = await $.clock.now();
@@ -234,38 +247,52 @@ const pressKeepWarm = async ($: Engine): Promise<void> => {
     // Never an `effort`: it can force a cache write instead of a read.
     const reply = await $.model.fork({ prompt: PING_PROMPT });
     const costAfter = await readCost($);
+    // The fork's usage holds token counts only, no price: the session's
+    // cost delta is the closest figure, shown as an estimate.
     const costUsd =
       costBefore !== null && costAfter !== null
         ? Math.max(0, costAfter - costBefore)
         : null;
 
+    if (!isCurrent()) {
+      return;
+    }
+
     if (reply.isAnswered) {
       // The ping read the whole prefix, which restarts its lifetime.
-      await update($, lastRequestAtAtom, () => sentAt);
-      await update($, lastPingAtom, () => ({ at: sentAt, costUsd, ok: true }));
-      startTicker($);
+      await update($, lastRequestAtAtom, (last) =>
+        isCurrent() ? sentAt : last,
+      );
+      await update($, lastPingAtom, (last) =>
+        isCurrent() ? { at: sentAt, costUsd, ok: true } : last,
+      );
+
+      if (isCurrent()) {
+        startTicker($);
+      }
     } else {
-      await update($, lastPingAtom, () => ({
-        at: sentAt,
-        costUsd,
-        ok: false,
-        reason: reply.reason,
-      }));
+      await update($, lastPingAtom, (last) =>
+        isCurrent()
+          ? { at: sentAt, costUsd, ok: false, reason: reply.reason }
+          : last,
+      );
       toastFailure($, reply);
     }
   } catch {
-    await safely(async () => {
-      const at = await $.clock.now();
-      await update($, lastPingAtom, () => ({
-        at,
-        costUsd: null,
-        ok: false,
-        reason: "error",
-      }));
-    });
-    $.ui.toast(TEXT_NO_REPLY);
+    if (isCurrent()) {
+      await safely(async () => {
+        const at = await $.clock.now();
+        await update($, lastPingAtom, (last) =>
+          isCurrent()
+            ? { at, costUsd: null, ok: false, reason: "error" }
+            : last,
+        );
+      });
+      $.ui.toast(TEXT_NO_REPLY);
+    }
   } finally {
     isPingInFlight = false;
+    // Also after a `/clear`: false is the new conversation's default too.
     await safely(async () => {
       await update($, warmingAtom, () => false);
     });
@@ -314,6 +341,7 @@ export const register: Register = (on) => {
   on("session.end", ($, e, next) => {
     stopTicker();
     lastTurnCompleteAt = null;
+    conversationEpoch += 1;
 
     return next(e);
   });
@@ -350,6 +378,8 @@ export const register: Register = (on) => {
 
     await safely(async () => {
       await update($, hiddenAtom, () => false);
+      // A newer answer: the last press's cost is old news.
+      await update($, lastPingAtom, () => null);
       const usage = result.usage;
 
       // No response, no cache touched: keep the last good state.
