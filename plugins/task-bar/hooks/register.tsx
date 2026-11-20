@@ -16,6 +16,12 @@ const MIN_BAR_CELLS = 10;
 const CARD_BAR_CELLS = 12;
 const TICK_MS = 1000;
 
+// Band layout (amendment 4): these plugins' rows on top, in this order, and
+// side by side from this band width; our own row last.
+const BAND_TOP: readonly string[] = ["fresh-start", "cache-timer"];
+const BAND_BOTTOM = "task-bar";
+const SIDE_BY_SIDE_FROM = 100;
+
 // Theme keys, never fixed colours, so the row follows the person's theme.
 // The theme table has no key literally named `accent` or `danger`: `claude` is
 // the theme's own accent colour and `error` its danger colour.
@@ -810,6 +816,60 @@ export const register: Register = (on) => {
     return reminder === undefined
       ? answer
       : { ...answer, additionalContext: [...(answer.additionalContext ?? []), reminder] };
+  }).catch(($, e, next) => next(e));
+
+  // The band's arrangement: fresh-start and cache-timer on top, other plugins'
+  // rows in received order, our own bar last, right above the prompt. Rows go
+  // on only as handed over (never changed or repeated); placing two side by
+  // side wraps what `next` drew for each, as the engine lets a list hook wrap
+  // rows, instead of copying their trees. Fails open: a layout bug must not
+  // blank the band.
+  on("ui.render", { component: "AbovePromptList" }, async ($, e, next) => {
+    const rows = e.props.rows;
+
+    if (new Set(rows.map((row) => row.plugin)).size <= 1) {
+      return next(e);
+    }
+
+    const top = BAND_TOP.flatMap((name) =>
+      rows.filter((row) => row.plugin === name),
+    );
+    const rest = rows.filter(
+      (row) => !BAND_TOP.includes(row.plugin) && row.plugin !== BAND_BOTTOM,
+    );
+    const bottom = rows.filter((row) => row.plugin === BAND_BOTTOM);
+    const withRows = (subset: typeof rows) => ({
+      ...e,
+      props: { ...e.props, rows: subset },
+    });
+    const [left, right] = top;
+    const below = [...rest, ...bottom];
+
+    if (
+      e.props.bodyColumns < SIDE_BY_SIDE_FROM ||
+      top.length !== 2 ||
+      left === undefined ||
+      right === undefined
+    ) {
+      return next(withRows([...top, ...below]));
+    }
+
+    const { Box } = $.ui.resolve(e);
+    // No width of ours around the rows: the engine refuses one above its own
+    // nodes. Each top row keeps to half the band itself (floor((columns - 1) / 2)).
+    const leftTree = await next(withRows([left]));
+    const rightTree = await next(withRows([right]));
+    const belowTree = below.length === 0 ? null : await next(withRows(below));
+
+    return (
+      <Box flexDirection="column">
+        <Box flexDirection="row" gap={1}>
+          {leftTree}
+          {rightTree}
+        </Box>
+        {belowTree}
+      </Box>
+    );
   }).catch(($, e, next) => next(e));
 
   on("ui.render", { component: "AbovePrompt" }, async ($, e, next) => {

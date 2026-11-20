@@ -1,6 +1,6 @@
 import { expect, mock, test } from "claude-code/testing";
 import type { Engine, Plugin } from "claude-code/testing";
-import type { AgentInfo, On, ToolCallResult } from "claude-code";
+import type { AgentInfo, On, RenderElement, ToolCallResult } from "claude-code";
 
 const SURFACES = ["terminal", "desktop"] as const;
 const CREW = {
@@ -1744,4 +1744,207 @@ test("a PostToolUse that lands while its response row is still being stored is k
   await storing;
 
   expect(answer.additionalContext).toEqual([REMINDER_START]);
+});
+
+// Amendment 4: the band layout.
+
+type BandRow = { plugin: string; tree: RenderElement };
+
+const bandRow = (plugin: string): BandRow => ({
+  plugin,
+  tree: {
+    type: "Box",
+    props: { flexDirection: "row" },
+    children: [
+      { type: "Text", props: { bold: true }, children: [`${plugin} row`] },
+    ],
+  },
+});
+
+const LIST = (rows: readonly BandRow[], bodyColumns: number) =>
+  ({
+    plugin: "task-bar",
+    component: "AbovePromptList",
+    props: { ...BAND.props, bodyColumns, rows },
+  }) as const;
+
+/**
+ * Stands in for core beneath the mod: records the rows each `next` hands it
+ * and stacks them as core does (one row alone is its own tree).
+ */
+const core = (on: On, { failSingle = false } = {}) => {
+  const received: BandRow[][] = [];
+  on("ui.render", { component: "AbovePromptList" }, (_, e) => {
+    const rows = e.props.rows as readonly BandRow[];
+    received.push([...rows]);
+
+    if (failSingle && rows.length === 1) {
+      throw new Error("refused");
+    }
+
+    const [only] = rows;
+
+    return rows.length === 1 && only !== undefined
+      ? only.tree
+      : {
+          type: "Box",
+          props: { flexDirection: "column" },
+          children: rows.map((row) => row.tree),
+        };
+  });
+
+  return received;
+};
+
+const plugins = (rows: readonly BandRow[]): string[] =>
+  rows.map((row) => row.plugin);
+
+test("at 120 columns fresh-start and cache-timer sit side by side, task-bar last, on every surface", async ($, on) => {
+  const received = core(on);
+  const rows = ["task-bar", "other", "cache-timer", "fresh-start"].map(bandRow);
+
+  for (const surface of SURFACES) {
+    received.length = 0;
+    const ui = await $.ui.mount({ ...LIST(rows, 120), surface });
+
+    expect(received.map(plugins)).toEqual([
+      ["fresh-start"],
+      ["cache-timer"],
+      ["other", "task-bar"],
+    ]);
+    const drawn = await ui.drawn();
+    expect(drawn).toMatchObject({
+      type: "Box",
+      props: { flexDirection: "column" },
+      children: [
+        {
+          type: "Box",
+          props: { flexDirection: "row", gap: 1 },
+          children: [bandRow("fresh-start").tree, bandRow("cache-timer").tree],
+        },
+        {
+          type: "Box",
+          children: [bandRow("other").tree, bandRow("task-bar").tree],
+        },
+      ],
+    });
+    await ui.unmount();
+  }
+});
+
+test("at 80 columns the rows stack: top two, the rest, task-bar last, on every surface", async ($, on) => {
+  const received = core(on);
+  const rows = ["task-bar", "other", "cache-timer", "fresh-start"].map(bandRow);
+
+  for (const surface of SURFACES) {
+    received.length = 0;
+    const ui = await $.ui.mount({ ...LIST(rows, 80), surface });
+
+    expect(received.map(plugins)).toEqual([
+      ["fresh-start", "cache-timer", "other", "task-bar"],
+    ]);
+    expect(await ui.drawn()).toMatchObject({
+      type: "Box",
+      props: { flexDirection: "column" },
+      children: ["fresh-start", "cache-timer", "other", "task-bar"].map(
+        (name) => bandRow(name).tree,
+      ),
+    });
+    await ui.unmount();
+  }
+});
+
+test("side by side needs both top rows; one alone stacks on top", async ($, on) => {
+  const received = core(on);
+
+  for (const surface of SURFACES) {
+    received.length = 0;
+    const ui = await $.ui.mount({
+      ...LIST(["task-bar", "fresh-start"].map(bandRow), 120),
+      surface,
+    });
+    expect(received.map(plugins)).toEqual([["fresh-start", "task-bar"]]);
+    await ui.unmount();
+  }
+});
+
+test("other plugins' rows keep their order, between the top and task-bar", async ($, on) => {
+  const received = core(on);
+  const ui = await $.ui.mount({
+    ...LIST(
+      ["zeta", "task-bar", "alpha", "cache-timer", "mid"].map(bandRow),
+      120,
+    ),
+    surface: "terminal",
+  });
+
+  expect(received.map(plugins)).toEqual([
+    ["cache-timer", "zeta", "alpha", "mid", "task-bar"],
+  ]);
+  await ui.unmount();
+});
+
+test("no rows or one plugin's row go on unchanged", async ($, on) => {
+  const received = core(on);
+
+  for (const rows of [[], [bandRow("cache-timer")], [bandRow("task-bar")]]) {
+    received.length = 0;
+    const ui = await $.ui.mount({ ...LIST(rows, 120), surface: "terminal" });
+    expect(received).toEqual([rows]);
+    await ui.unmount();
+  }
+});
+
+test("rows are never changed or repeated, only moved", async ($, on) => {
+  const received = core(on);
+  const rows = ["other", "task-bar", "fresh-start", "cache-timer", "more"].map(
+    bandRow,
+  );
+
+  for (const columns of [120, 80]) {
+    received.length = 0;
+    const ui = await $.ui.mount({
+      ...LIST(rows, columns),
+      surface: "terminal",
+    });
+    const handed = received.flat();
+
+    // Every row handed on exactly once, each equal by value to its original.
+    expect(handed.length).toBe(rows.length);
+    for (const row of rows) {
+      expect(handed.filter((one) => one.plugin === row.plugin)).toEqual([row]);
+    }
+    await ui.unmount();
+  }
+});
+
+test("rows the engine stacks itself still sit side by side, on every surface", async ($, on) => {
+  // Beneath refuses each single row, so the engine's own nodes come back from
+  // `next`; the wrapper around them must still validate (no width of ours).
+  const received = core(on, { failSingle: true });
+  const rows = ["task-bar", "cache-timer", "fresh-start"].map(bandRow);
+
+  for (const surface of SURFACES) {
+    received.length = 0;
+    const ui = await $.ui.mount({ ...LIST(rows, 120), surface });
+
+    expect(received.map(plugins)).toEqual([
+      ["fresh-start"],
+      ["cache-timer"],
+      ["task-bar"],
+    ]);
+    expect(await ui.drawn()).toMatchObject({
+      type: "Box",
+      props: { flexDirection: "column" },
+      children: [
+        {
+          type: "Box",
+          props: { flexDirection: "row", gap: 1 },
+          children: [bandRow("fresh-start").tree, bandRow("cache-timer").tree],
+        },
+        bandRow("task-bar").tree,
+      ],
+    });
+    await ui.unmount();
+  }
 });

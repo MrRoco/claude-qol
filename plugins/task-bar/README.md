@@ -9,6 +9,10 @@ Shows how far Claude is with its to-do list, and what its subagents are doing.
 - **Crew pane.** One card per subagent of this chat: its type and task, running/done/failed,
   elapsed time, tool calls and the last tool it used. A subagent with its own to-do list gets a
   small bar on its card. Finished cards are cleared at your next prompt.
+- **Tidy rows above the prompt.** The mod arranges the rows other mods put above the prompt:
+  fresh-start and cache-timer on top (side by side from 100 columns, when both show), other
+  mods' rows in their own order below them, and task-bar's bar last, right above the prompt.
+  The rows themselves are never changed or hidden.
 
 Where Claude Code offers none of its own to-do tools, the mod gives Claude a `progress` tool
 to send its list with, optionally with a goal shown in the bar (`3/5  Refactor auth · Running
