@@ -1,0 +1,23 @@
+{
+  "name": "lesson-saver",
+  "version": "0.1.0",
+  "description": "Notices when you correct Claude and offers to save the fix as a rule in CLAUDE.md",
+  "author": { "name": "MrRoco" },
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "maxLength": {
+      "type": "number",
+      "title": "Check prompts up to (characters)",
+      "description": "Only typed prompts up to this length are checked for corrections",
+      "default": 400
+    },
+    "model": {
+      "type": "string",
+      "title": "Model for the check",
+      "description": "Model used for the side request",
+      "default": "haiku",
+      "options": ["haiku", "sonnet"]
+    }
+  }
+}
