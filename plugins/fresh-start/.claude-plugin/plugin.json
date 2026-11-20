@@ -1,0 +1,16 @@
+{
+  "name": "fresh-start",
+  "version": "0.1.0",
+  "description": "Offers a handoff when a chat grows large, saves it in the project, then starts a fresh chat with it or copies it",
+  "author": { "name": "MrRoco" },
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "threshold": {
+      "type": "number",
+      "title": "Offer threshold (tokens)",
+      "description": "Offer a handoff once the chat's context passes this many tokens",
+      "default": 250000
+    }
+  }
+}

@@ -43,8 +43,16 @@ scripts/check.sh                       # validate the marketplace and every mod,
 - Generated files (`.claude-plugin/types/`, a generated `tsconfig.json`) are not committed.
 - Commits: conventional commit format, imperative mood, no AI attribution trailers.
 - Tested on Claude Code 2.1.328.
+- Spike host capabilities before writing a contract (for example which tools are offered),
+  with a short live probe: the test kit raises events a real session may never deliver.
+- Always give `tool.call` hooks a tool matcher. A matcher-less one turns off background
+  moves, live output and Code Mode's wait for every tool.
+- Keep hook counter state synchronous: never check state across an `await`, so parallel
+  calls can't race.
 
 ## Phase contracts
 
 - `.plan/phase0-contract.md` — marketplace skeleton
 - `.plan/phase1-contract.md` — task-bar
+- `.plan/phase2-contract.md` — fresh-start
+- `.plan/phase3-contract.md` — cache-timer

@@ -1,12 +1,19 @@
 {
   "name": "qol",
-  "owner": { "name": "MrRoco" },
+  "owner": {
+    "name": "MrRoco"
+  },
   "description": "Quality-of-life mods for Claude Code",
   "plugins": [
     {
       "name": "task-bar",
       "source": "./plugins/task-bar",
       "description": "A progress bar above the prompt for Claude's to-do list, and a Crew pane with a live card per subagent"
+    },
+    {
+      "name": "fresh-start",
+      "source": "./plugins/fresh-start",
+      "description": "Offers a handoff when a chat grows large, saves it in the project, then starts a fresh chat with it or copies it"
     }
   ]
 }
