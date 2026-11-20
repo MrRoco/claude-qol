@@ -19,6 +19,11 @@
       "name": "cache-timer",
       "source": "./plugins/cache-timer",
       "description": "Counts down above the prompt until the chat's prompt cache goes cold, with a Keep warm button"
+    },
+    {
+      "name": "chat-ledger",
+      "source": "./plugins/chat-ledger",
+      "description": "A Ledger pane listing the connectors, files, skills, commands and context files this chat used"
     }
   ]
 }

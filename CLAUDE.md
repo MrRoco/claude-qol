@@ -56,3 +56,4 @@ scripts/check.sh                       # validate the marketplace and every mod,
 - `.plan/phase1-contract.md` — task-bar
 - `.plan/phase2-contract.md` — fresh-start
 - `.plan/phase3-contract.md` — cache-timer
+- `.plan/phase6-contract.md` — chat-ledger
