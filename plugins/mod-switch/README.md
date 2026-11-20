@@ -33,6 +33,10 @@ Some rows show a reason instead of a button:
   yours, so the pane does not try.
 - `session only`: the mod was loaded with `--plugin-dir` for this session. There is no setting
   to change; start Claude Code without the flag to leave it out.
+- `installed twice`: the mod is installed in more than one scope for this project (for
+  example both local and project), so it is not clear which setting to change. Use
+  `claude plugin enable` or `disable` with `--scope` yourself. Local or project installs made
+  in other projects are not listed at all.
 - `this mod`: mod-switch itself. Turning it off from its own pane would close the pane; use
   `claude plugin disable mod-switch@qol` instead.
 

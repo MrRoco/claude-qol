@@ -23,7 +23,7 @@ const SWITCH_TIMEOUT_MS = 30_000;
 
 // What may reach a process call: a plain `name@marketplace` and a scope the
 // CLI writes to. Anything else is refused before a process starts.
-const ID_PATTERN = /^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+$/;
+const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9._-]+$/;
 const SWITCH_SCOPES: readonly string[] = ["user", "project", "local"];
 const LIST_SCOPES: readonly string[] = ["user", "project", "local", "session"];
 
@@ -39,6 +39,7 @@ const LOCK_TEXT: Record<ModLock, string> = {
   managed: "managed",
   session: "session only",
   self: "this mod",
+  ambiguous: "installed twice",
 };
 
 const modsAtom = atom({ plugin: "mod-switch", key: "mods" } as const, []);
@@ -71,6 +72,9 @@ let listError: string | null = null;
 // Taken synchronously by a switch or a set apply: one change at a time.
 let isChanging = false;
 let isReloading = false;
+// The session's folder, from session.start: tells this project's local and
+// project installs from other projects'.
+let sessionCwd: string | null = null;
 // The save-as-set form.
 let isNaming = false;
 let draftName = "";
@@ -82,16 +86,7 @@ const errorMessage = (error: unknown): string =>
     ? error.message
     : String(error);
 
-/** The first non-empty line of a text, cut to a readable length. */
-const firstLine = (text: string): string =>
-  (
-    text
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find((line) => line !== "") ?? ""
-  ).slice(0, MAX_REASON);
-
-/** Display text from a file we do not own: no control characters, one line. */
+/** Display text from a source we do not own: no control characters, one line. */
 const cleanText = (value: unknown, max: number): string | null => {
   if (typeof value !== "string") {
     return null;
@@ -105,6 +100,19 @@ const cleanText = (value: unknown, max: number): string | null => {
 
   return text === "" ? null : text.slice(0, max);
 };
+
+/**
+ * The first non-empty line of a text (CLI output, an error), cleaned and cut
+ * to a readable length: it is shown in the error row and in toasts.
+ */
+const firstLine = (text: string): string =>
+  cleanText(
+    text
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line !== "") ?? "",
+    MAX_REASON,
+  ) ?? "";
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -158,6 +166,7 @@ const lockFor = (
   name: string,
   scope: ModScope | null,
   isManaged: boolean,
+  isAmbiguous = false,
 ): ModLock | null => {
   if (name === SELF_NAME) {
     return "self";
@@ -165,6 +174,10 @@ const lockFor = (
 
   if (isManaged) {
     return "managed";
+  }
+
+  if (isAmbiguous) {
+    return "ambiguous";
   }
 
   return scope === "session" ? "session" : null;
@@ -183,6 +196,87 @@ export type ListedPlugin = {
 const namesModule = (hooks: Record<string, unknown> | undefined): boolean =>
   Array.isArray(hooks?.modules) && hooks.modules.length > 0;
 
+const trimPath = (path: string): string => path.replace(/[\\/]+$/, "");
+
+const isProjectScope = (entry: Record<string, unknown>): boolean =>
+  entry.scope === "local" || entry.scope === "project";
+
+/**
+ * Whether a `local` or `project` install belongs to another project: the CLI
+ * lists those too, with their `projectPath`. Unknown when the session's
+ * folder is not known yet, and then kept.
+ */
+const isOtherProject = (
+  entry: Record<string, unknown>,
+  cwd: string | null,
+): boolean =>
+  cwd !== null &&
+  isProjectScope(entry) &&
+  typeof entry.projectPath === "string" &&
+  trimPath(entry.projectPath) !== trimPath(cwd);
+
+const isThisProject = (
+  entry: Record<string, unknown>,
+  cwd: string | null,
+): boolean =>
+  cwd !== null &&
+  isProjectScope(entry) &&
+  typeof entry.projectPath === "string" &&
+  trimPath(entry.projectPath) === trimPath(cwd);
+
+/**
+ * One entry per id: other projects' installs dropped; of several left, the
+ * one for this project, else the single user install; else the first, marked
+ * ambiguous so it is not switched in a scope that may be the wrong one.
+ */
+const pickEntries = (
+  listed: readonly ListedPlugin[],
+  cwd: string | null,
+): { plugin: ListedPlugin; isAmbiguous: boolean }[] => {
+  const groups = new Map<string, ListedPlugin[]>();
+
+  for (const plugin of listed) {
+    if (
+      !ID_PATTERN.test(plugin.entry.id) ||
+      isOtherProject(plugin.entry, cwd)
+    ) {
+      continue;
+    }
+
+    groups.set(plugin.entry.id, [
+      ...(groups.get(plugin.entry.id) ?? []),
+      plugin,
+    ]);
+  }
+
+  return [...groups.values()].flatMap((group) => {
+    const [first] = group;
+
+    if (first === undefined) {
+      return [];
+    }
+
+    if (group.length === 1) {
+      return [{ plugin: first, isAmbiguous: false }];
+    }
+
+    const here = group.filter((one) => isThisProject(one.entry, cwd));
+    const user = group.filter((one) => one.entry.scope === "user");
+    const pick =
+      here.length === 1
+        ? here[0]
+        : here.length === 0 && user.length === 1
+          ? user[0]
+          : undefined;
+
+    return [
+      pick === undefined
+        ? { plugin: first, isAmbiguous: true }
+        : { plugin: pick, isAmbiguous: false },
+    ];
+  });
+};
+
 /**
  * Builds the pane's rows: the listed plugins kept to the mods (a hooks.json
  * naming a module, or a module seen by `plugin.register`), merged with what
@@ -193,19 +287,17 @@ export const buildRows = (
   listed: readonly ListedPlugin[],
   seenPlugins: ReadonlyMap<string, Seen>,
   enabled: Readonly<Record<string, unknown>>,
+  cwd: string | null = null,
 ): ModRow[] => {
   const rows: ModRow[] = [];
   const ids = new Set<string>();
 
-  for (const { entry, hooks, manifest } of listed) {
+  for (const { plugin, isAmbiguous } of pickEntries(listed, cwd)) {
+    const { entry, hooks, manifest } = plugin;
     const id = entry.id;
     const saw = seenPlugins.get(id);
 
-    if (
-      !ID_PATTERN.test(id) ||
-      ids.has(id) ||
-      (!namesModule(hooks) && saw?.hasModule !== true)
-    ) {
+    if (!namesModule(hooks) && saw?.hasModule !== true) {
       continue;
     }
 
@@ -236,7 +328,7 @@ export const buildRows = (
       description: cleanText(manifest?.description, MAX_DESCRIPTION),
       scope,
       isOn,
-      lock: lockFor(name, scope, isManaged),
+      lock: lockFor(name, scope, isManaged, isAmbiguous),
       problem: null,
     });
   }
@@ -310,7 +402,8 @@ const listMods = async ($: Engine): Promise<ModRow[]> => {
     if (
       !isObject(entry) ||
       typeof entry.id !== "string" ||
-      !ID_PATTERN.test(entry.id)
+      !ID_PATTERN.test(entry.id) ||
+      isOtherProject(entry, sessionCwd)
     ) {
       continue;
     }
@@ -334,7 +427,7 @@ const listMods = async ($: Engine): Promise<ModRow[]> => {
     listed.push({ entry: { ...entry, id: entry.id }, hooks, manifest });
   }
 
-  return buildRows(listed, seen, await readEnabled($));
+  return buildRows(listed, seen, await readEnabled($), sessionCwd);
 };
 
 /** Lists again; a failure becomes the error row with Try again. */
@@ -483,7 +576,8 @@ const pressSwitch = async ($: Engine, id: string): Promise<void> => {
 };
 
 const pressReload = async ($: Engine): Promise<void> => {
-  if (isReloading) {
+  // Not while a switch or a set apply is under way: it would reload halfway.
+  if (isReloading || isChanging) {
     return;
   }
 
@@ -505,19 +599,26 @@ const pressReload = async ($: Engine): Promise<void> => {
   }
 };
 
-const isSavedSet = (value: unknown): value is SavedSet =>
+const isSavedSet = (value: unknown): value is { name: string; on: unknown[] } =>
   isObject(value) &&
   typeof value.name === "string" &&
   SET_NAME_PATTERN.test(value.name) &&
-  Array.isArray(value.on) &&
-  value.on.every((id) => typeof id === "string");
+  Array.isArray(value.on);
+
+/** A stored set as read back: only plain ids, at most MAX_SET_IDS of them. */
+const cleanSet = (set: { name: string; on: unknown[] }): SavedSet => ({
+  name: set.name,
+  on: set.on
+    .filter((id): id is string => typeof id === "string" && ID_PATTERN.test(id))
+    .slice(0, MAX_SET_IDS),
+});
 
 const readSets = async ($: Engine): Promise<SavedSet[]> => {
   try {
     const stored = await $.store.get(SETS_KEY);
 
     return Array.isArray(stored)
-      ? stored.filter(isSavedSet).slice(0, MAX_SETS)
+      ? stored.filter(isSavedSet).slice(0, MAX_SETS).map(cleanSet)
       : [];
   } catch {
     return [];
@@ -684,6 +785,18 @@ export const register: Register = (on) => {
   // Fires at the session's start and at every reload: it registers, never
   // resets, so the list and the reload line outlive a reload.
   on("session.start", async ($, e, next) => {
+    sessionCwd = typeof e.cwd === "string" && e.cwd !== "" ? e.cwd : null;
+
+    // Only the in-flight markers: no switch or listing of an earlier copy of
+    // this module runs on after a reload, so a left `…` or loading row would
+    // never clear. The list and the reload line stay.
+    try {
+      await update($, busyIdAtom, () => null);
+      await update($, isLoadingAtom, () => false);
+    } catch {
+      // The next listing sets both again.
+    }
+
     try {
       await $.command.register({
         name: COMMAND,

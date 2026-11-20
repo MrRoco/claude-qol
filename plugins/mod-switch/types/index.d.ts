@@ -5,7 +5,7 @@
 export type ModScope = "user" | "project" | "local" | "session";
 
 /** Why a row cannot be switched from the pane. */
-export type ModLock = "managed" | "session" | "self";
+export type ModLock = "managed" | "session" | "self" | "ambiguous";
 
 /** One installed mod, as the pane lists it. */
 export type ModRow = {
@@ -34,7 +34,7 @@ declare module "claude-code" {
         description: string | null;
         scope: "user" | "project" | "local" | "session" | null;
         isOn: boolean;
-        lock: "managed" | "session" | "self" | null;
+        lock: "managed" | "session" | "self" | "ambiguous" | null;
         problem: string | null;
       }[];
       isLoading: boolean;

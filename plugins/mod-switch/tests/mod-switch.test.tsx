@@ -33,6 +33,7 @@ type Entry = {
   scope: string;
   enabled: boolean;
   installPath?: string;
+  projectPath?: string;
 };
 
 const MOD_HOOKS = '{ "modules": ["./register.tsx"] }';
@@ -74,6 +75,8 @@ type WorldOptions = {
   reloadFails?: boolean;
   // Holds the listing until this promise resolves.
   listWaits?: Promise<void>;
+  // Holds each enable or disable until this promise resolves.
+  switchWaits?: () => Promise<void>;
 };
 
 type World = {
@@ -153,6 +156,7 @@ const world = (on: On, options: WorldOptions = {}): World => {
         : processResult("", 1, `${listFails}\nmore detail`);
     }
 
+    await options.switchWaits?.();
     const id = argv[3] ?? "";
     const refusal = options.refuse?.[id];
 
@@ -632,13 +636,164 @@ test("Delete removes a set", async ($, on) => {
 test("stored sets of the wrong shape are ignored", async ($, on) => {
   world(on, {
     plugins: [QOL],
-    sets: [{ name: "x/y", on: [] }, "junk", { name: "ok", on: [1] }],
+    sets: [{ name: "x/y", on: [] }, "junk", { name: "ok", on: "all" }],
   });
   await openPane($);
   const ui = await $.ui.mount({ ...PANE, surface: "terminal" });
 
   expect(await texts(ui)).toContain("No sets saved yet.");
   await ui.unmount();
+});
+
+test("stored set ids that are not plain ids are dropped when read", async ($, on) => {
+  const engine = world(on, {
+    plugins: [QOL],
+    sets: [{ name: "rec", on: ["task-bar@qol", "--evil@qol", 5, "a b@qol"] }],
+  });
+  await openPane($);
+  const ui = await $.ui.mount({ ...PANE, surface: "terminal" });
+
+  await ui.press({ key: "apply:rec" });
+
+  // task-bar is on already; the bad ids are neither run nor named as missing.
+  expect(engine.runs.slice(1)).toEqual([]);
+  expect(engine.toasts).toEqual([]);
+  await ui.unmount();
+});
+
+test("an id starting with a dash is never listed", async ($, on) => {
+  const dash = installed("-rf@qol");
+  world(on, { plugins: [dash, QOL] });
+  await openPane($);
+  const ui = await $.ui.mount({ ...PANE, surface: "terminal" });
+
+  expect(await ui.find({ key: "-rf@qol" })).toBeUndefined();
+  expect((await texts(ui)).some((text) => text.includes("-rf"))).toBe(false);
+  await ui.unmount();
+});
+
+test("CLI error text is cleaned before it is shown", async ($, on) => {
+  world(on, { plugins: [QOL], listFails: "\u001b[31mbroke\u0007 badly" });
+  await openPane($);
+  const ui = await $.ui.mount({ ...PANE, surface: "terminal" });
+
+  expect(await texts(ui)).toContain("Could not list mods: [31mbroke badly");
+  await ui.unmount();
+});
+
+test("another project's local or project install is left out", async ($, on) => {
+  const here = installed("here@qol", { scope: "local" });
+  const there = installed("there@qol", { scope: "project" });
+  const engine = world(on, {
+    plugins: [
+      { ...here, entry: { ...here.entry, projectPath: "/work/this/" } },
+      { ...there, entry: { ...there.entry, projectPath: "/work/other" } },
+    ],
+  });
+  await $.session.start({
+    cwd: "/work/this",
+    surface: "terminal",
+    isInteractive: true,
+  });
+  await openPane($);
+  const ui = await $.ui.mount({ ...PANE, surface: "terminal" });
+
+  const shown = await texts(ui);
+  expect(shown).toContain("here");
+  expect(shown).not.toContain("there");
+  await ui.press({ key: "here@qol" });
+  expect(engine.runs.slice(1)).toEqual([
+    ["claude", "plugin", "disable", "here@qol", "--scope", "local", "--json"],
+  ]);
+  await ui.unmount();
+});
+
+test("Reload now waits while a switch is under way", async ($, on) => {
+  let release = () => {};
+  let isHolding = false;
+  const engine = world(on, {
+    plugins: [QOL, FRESH],
+    switchWaits: () =>
+      isHolding
+        ? new Promise<void>((resolve) => {
+            release = resolve;
+          })
+        : Promise.resolve(),
+  });
+  await openPane($);
+  const ui = await $.ui.mount({ ...PANE, surface: "terminal" });
+  await ui.press({ key: "task-bar@qol" });
+
+  isHolding = true;
+  const held = ui.press({ key: "fresh-start@qol" });
+  await pause(10);
+  await ui.press({ key: "reload" });
+
+  expect(engine.commands).toEqual([]);
+  release();
+  await held;
+  // The switch's last state write lands just after its press settles.
+  await pause(20);
+  await ui.press({ key: "reload" });
+
+  expect(engine.commands).toEqual(["reload-plugins"]);
+  expect(await ui.find({ key: "reload" })).toBeUndefined();
+  await ui.unmount();
+});
+
+test("session.start clears a loading row left by an earlier copy", async ($, on) => {
+  let release = () => {};
+  const listWaits = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  world(on, { plugins: [QOL], listWaits });
+  await $.command.run(MODS);
+  await $.session.start({ cwd: "/", surface: "terminal", isInteractive: true });
+
+  const ui = await $.ui.mount({ ...PANE, surface: "terminal" });
+  expect(await texts(ui)).not.toContain("Looking for mods…");
+  await ui.unmount();
+  release();
+});
+
+test("buildRows leaves out other projects' installs and picks one entry per id", () => {
+  const entry = (
+    id: string,
+    scope: string,
+    projectPath?: string,
+  ): ListedPlugin => ({
+    entry: {
+      id,
+      scope,
+      enabled: true,
+      ...(projectPath === undefined ? {} : { projectPath }),
+    },
+    hooks: { modules: ["./register.tsx"] },
+    manifest: undefined,
+  });
+  const rows = buildRows(
+    [
+      entry("elsewhere@qol", "local", "/work/other"),
+      // This project's install wins over the user one.
+      entry("both@qol", "user"),
+      entry("both@qol", "local", "/work/this"),
+      // Another project's install is dropped, the user one stays.
+      entry("user-wins@qol", "project", "/work/other"),
+      entry("user-wins@qol", "user"),
+      // Two installs for this project: no way to tell which to switch.
+      entry("twice@qol", "local", "/work/this"),
+      entry("twice@qol", "project", "/work/this"),
+    ],
+    new Map(),
+    {},
+    "/work/this",
+  );
+
+  expect(rows.map((row) => [row.id, row.scope, row.lock])).toEqual([
+    ["both@qol", "local", null],
+    ["twice@qol", "local", "ambiguous"],
+    ["user-wins@qol", "user", null],
+  ]);
 });
 
 test("the pane shows the loading row while the CLI lists", async ($, on) => {
