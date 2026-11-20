@@ -1,6 +1,6 @@
 {
   "name": "prompt-shaper",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Catches a long prompt, asks a few questions about gaps, and turns it into a clear brief in the prompt box",
   "author": { "name": "MrRoco" },
   "license": "MIT",
@@ -10,7 +10,7 @@
       "type": "number",
       "title": "Catch prompts from (characters)",
       "description": "Typed prompts at least this long are shaped before sending",
-      "default": 600
+      "default": 400
     },
     "model": {
       "type": "string",

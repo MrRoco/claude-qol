@@ -2,7 +2,7 @@
 
 Turns a long, loose prompt into a clear brief before it reaches Claude.
 
-- **Held before sending.** When you type a prompt of 600 characters or more (a setting) and
+- **Held before sending.** When you type a prompt of 400 characters or more (a setting) and
   press Enter, it is not sent. A row above the prompt says `◇ prompt-shaper · reading your
 prompt…`.
 - **A few questions.** A small side request, separate from the chat, reads the prompt and looks
@@ -42,7 +42,7 @@ In Claude Code's config menu, or under `pluginConfigs` for `prompt-shaper` in yo
 
 | Setting                         | Option      | Default | Notes                                         |
 | ------------------------------- | ----------- | ------- | --------------------------------------------- |
-| Catch prompts from (characters) | `minLength` | 600     | Below 100, or not a number, falls back to 600 |
+| Catch prompts from (characters) | `minLength` | 400     | Below 100, or not a number, falls back to 400 |
 | Model for shaping               | `model`     | `haiku` | `haiku` or `sonnet`                           |
 
 ## Cost

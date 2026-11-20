@@ -10,7 +10,7 @@ const COMMAND_DESCRIPTION =
   "Turn a prompt into a clear brief in the prompt box";
 const COMMAND_HINT = "<your prompt>";
 
-const DEFAULT_MIN_LENGTH = 600;
+const DEFAULT_MIN_LENGTH = 400;
 const LOWEST_MIN_LENGTH = 100;
 const MODELS = ["haiku", "sonnet"] as const;
 const DEFAULT_MODEL = "haiku";

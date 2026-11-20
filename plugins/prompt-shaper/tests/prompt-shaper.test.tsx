@@ -6,7 +6,7 @@ const SURFACES = ["terminal", "desktop"] as const;
 type Surface = (typeof SURFACES)[number];
 
 const ROOT = "/work/project";
-// Long enough to be caught at the default of 600 characters.
+// Long enough to be caught at the default of 400 characters.
 const LONG = `Build the CSV importer for the orders table. ${"Keep it simple. ".repeat(40)}`;
 const BRIEF =
   "## Task\nBuild the CSV importer.\n\n## Done when\nOrders import.";
@@ -212,7 +212,7 @@ const isRowEmpty = async ($: Engine, surface: Surface): Promise<boolean> => {
   return isEmpty;
 };
 
-test("a typed prompt of 600+ characters is held and the row shows", async ($, on) => {
+test("a typed prompt of 400+ characters is held and the row shows", async ($, on) => {
   const engine = world(on);
   engine.isHolding = true;
 
@@ -243,7 +243,7 @@ test("a typed prompt of 600+ characters is held and the row shows", async ($, on
 
 test("shorter, queued, meta, slash, attachment and other origins pass unchanged", async ($, on) => {
   const engine = world(on);
-  const short = "y".repeat(599);
+  const short = "y".repeat(399);
   const cases: [string, Record<string, unknown>][] = [
     [short, {}],
     [`  ${short}  `, {}],
@@ -602,18 +602,29 @@ test(
 );
 
 test(
-  "a minimum length below 100 falls back to 600",
+  "a minimum length below 100 falls back to 400",
   { options: { minLength: 50 } },
   async ($, on) => {
     const engine = world(on);
     engine.isHolding = true;
 
-    expect((await submit($, "z".repeat(599))).text).toBe("z".repeat(599));
-    expect(await submit($, "z".repeat(600))).toEqual({ drop: DROP });
+    expect((await submit($, "z".repeat(399))).text).toBe("z".repeat(399));
+    expect(await submit($, "z".repeat(400))).toEqual({ drop: DROP });
     await settle();
     expect(engine.requests[0]?.model).toBe("haiku");
   },
 );
+
+test("at the default, a 450-character prompt is caught and a 399-character one is not", async ($, on) => {
+  const engine = world(on);
+  engine.isHolding = true;
+
+  expect((await submit($, "q".repeat(399))).text).toBe("q".repeat(399));
+  expect(engine.requests).toEqual([]);
+  expect(await submit($, "q".repeat(450))).toEqual({ drop: DROP });
+  await settle();
+  expect(engine.requests.length).toBe(1);
+});
 
 test("session.start registers /shape and never resets a run", async ($, on) => {
   const engine = world(on);
