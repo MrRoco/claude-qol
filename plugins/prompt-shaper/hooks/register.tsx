@@ -39,6 +39,7 @@ const TEXT_DROP = "prompt-shaper is reading your prompt.";
 const TEXT_USAGE = "Usage: /shape <your prompt>";
 const TEXT_BUSY = "prompt-shaper is already busy with a prompt.";
 const TEXT_STARTED = "Shaping your prompt.";
+const TEXT_NOT_STARTED = "prompt-shaper could not start.";
 const TEXT_READY = "Brief ready in the prompt box. Edit and send it.";
 const TEXT_FAILED = "Could not shape the prompt; your text is back in the box.";
 const TEXT_READING = "◇ prompt-shaper · reading your prompt…";
@@ -368,9 +369,13 @@ const readPrompt = async (
     return;
   }
 
-  await update($, questionsAtom, () => questions);
-  await update($, indexAtom, () => 0);
-  await update($, answersAtom, () => []);
+  // Each write checks the run again: a Cancel between them leaves no
+  // questions of an ended run behind.
+  await update($, questionsAtom, (current) =>
+    run === activeRun ? questions : current,
+  );
+  await update($, indexAtom, (current) => (run === activeRun ? 0 : current));
+  await update($, answersAtom, (current) => (run === activeRun ? [] : current));
   await update($, stepAtom, (step) =>
     run === activeRun && step === "reading" ? "asking" : step,
   );
@@ -386,28 +391,52 @@ const startRun = async (
   settings: Settings,
   text: string,
 ): Promise<boolean> => {
-  let isStarted = false;
-  await update($, stepAtom, (step) => {
-    isStarted = step === "idle" && activeRun === null;
+  // The run is taken inside the updater, so no drawing in between finds the
+  // step moved but no run behind it.
+  let claimed: number | null = null;
 
-    return isStarted ? "reading" : step;
-  });
+  try {
+    await update($, stepAtom, (step) => {
+      if (claimed !== null && claimed === activeRun) {
+        // A retry of this same update: the run is already ours.
+        return "reading";
+      }
 
-  if (!isStarted) {
+      if (step !== "idle" || activeRun !== null) {
+        return step;
+      }
+
+      runId += 1;
+      claimed = runId;
+      activeRun = claimed;
+      original = text;
+      heldText = null;
+
+      return "reading";
+    });
+  } catch (error) {
+    // The step was not written: the run never started.
+    abandonRun(claimed);
+    throw error;
+  }
+
+  if (claimed === null) {
     return false;
   }
 
-  runId += 1;
-  const run = runId;
-  activeRun = run;
-  original = text;
-  heldText = null;
+  const run: number = claimed;
 
   void (async () => {
     try {
-      await update($, questionsAtom, () => []);
-      await update($, indexAtom, () => 0);
-      await update($, answersAtom, () => []);
+      await update($, questionsAtom, (current) =>
+        run === activeRun ? [] : current,
+      );
+      await update($, indexAtom, (current) =>
+        run === activeRun ? 0 : current,
+      );
+      await update($, answersAtom, (current) =>
+        run === activeRun ? [] : current,
+      );
       await readPrompt($, settings, run);
     } catch {
       await safely(() => endRun($, run, "failed"));
@@ -415,6 +444,33 @@ const startRun = async (
   })();
 
   return true;
+};
+
+/**
+ * Drops `run` without putting anything in the box: for a run whose prompt
+ * is being sent after all. Its late replies find it gone.
+ */
+const abandonRun = (run: number | null): void => {
+  if (run !== null && run === activeRun) {
+    activeRun = null;
+    original = null;
+  }
+};
+
+/**
+ * Runs a step of `run`; should it fail, the run ends as failed and the
+ * original goes back to the box.
+ */
+const orFail = async (
+  $: Engine,
+  run: number,
+  work: () => Promise<void>,
+): Promise<void> => {
+  try {
+    await work();
+  } catch {
+    await safely(() => endRun($, run, "failed"));
+  }
 };
 
 /**
@@ -542,7 +598,16 @@ export const register: Register = (on, options) => {
     }
 
     return { drop: TEXT_DROP };
-  }).catch(($, e, next) => next(e));
+  }).catch(($, e, next) => {
+    // The prompt is sent after all: a run started for it must not bring a
+    // brief later as well.
+    if (activeRun !== null && original === e.text) {
+      abandonRun(activeRun);
+      void safely(() => resetState($));
+    }
+
+    return next(e);
+  });
 
   on("command.run", { command: COMMAND }, async ($, e) => {
     const text = e.args.trim();
@@ -557,7 +622,10 @@ export const register: Register = (on, options) => {
       text: isStarted ? TEXT_STARTED : TEXT_BUSY,
       isTextDisplayOnly: true,
     };
-  }).catch(() => ({ text: TEXT_BUSY, isTextDisplayOnly: true as const }));
+  }).catch(() => ({
+    text: TEXT_NOT_STARTED,
+    isTextDisplayOnly: true as const,
+  }));
 
   on("ui.render", { component: "AbovePrompt" }, async ($, e, next) => {
     const step: Step = await read($, stepAtom);
@@ -583,14 +651,23 @@ export const register: Register = (on, options) => {
         <Button key={key} label={label} onPress={onPress} />
       </Box>
     );
-    const cancelButton = button("cancel", "Cancel", () => void cancel($, run));
+    const cancelButton = button(
+      "cancel",
+      "Cancel",
+      () => void safely(() => cancel($, run)),
+    );
+    const closeButton = button(
+      "close",
+      "Close",
+      () => void safely(() => cancel($, null)),
+    );
 
     if (step === "held") {
       return (
         <Box flexDirection="column" width={columns}>
           <Box flexDirection="row">
             {lead(TEXT_HELD)}
-            {button("close", "Close", () => void cancel($, null))}
+            {closeButton}
           </Box>
           <Text>{heldText ?? ""}</Text>
         </Box>
@@ -602,7 +679,7 @@ export const register: Register = (on, options) => {
       return (
         <Box flexDirection="row" width={columns}>
           {lead(TEXT_LOST, DANGER)}
-          {button("close", "Close", () => void cancel($, null))}
+          {closeButton}
         </Box>
       );
     }
@@ -628,12 +705,14 @@ export const register: Register = (on, options) => {
               submitLabel="answer"
               onSubmit={(value) => {
                 const answer = value.trim();
-                void answerQuestion(
-                  $,
-                  settings,
-                  run,
-                  index,
-                  answer === "" ? null : answer,
+                void orFail($, run, () =>
+                  answerQuestion(
+                    $,
+                    settings,
+                    run,
+                    index,
+                    answer === "" ? null : answer,
+                  ),
                 );
               }}
             />
@@ -641,12 +720,18 @@ export const register: Register = (on, options) => {
               {button(
                 "skip",
                 "Skip",
-                () => void answerQuestion($, settings, run, index, null),
+                () =>
+                  void orFail($, run, () =>
+                    answerQuestion($, settings, run, index, null),
+                  ),
               )}
               {button(
                 "skip-all",
                 "Skip all",
-                () => void answerQuestion($, settings, run, index, null, true),
+                () =>
+                  void orFail($, run, () =>
+                    answerQuestion($, settings, run, index, null, true),
+                  ),
               )}
               {cancelButton}
             </Box>

@@ -673,3 +673,90 @@ test("other hooks pass events on unchanged; a survey keeps the row away", async 
     await ui.unmount();
   }
 });
+
+test("a state write failing while asking ends the run and puts the original back", async ($, on) => {
+  const engine = world(on);
+  let isBroken = false;
+  on("state.set", (_, e, next) =>
+    isBroken ? { deny: "state unavailable" } : next(e),
+  );
+
+  for (const surface of SURFACES) {
+    engine.filled.length = 0;
+    engine.toasts.length = 0;
+    engine.replies.push('{"questions": ["One?", "Two?"]}');
+    await catchLong($);
+    expect(await rowText($, surface)).toBe("◇ Question 1 of 2: One?");
+
+    isBroken = true;
+    await onBand($, surface, async (ui) => {
+      await ui.input({ key: "answer-0", text: "yes" });
+    });
+    await settle();
+    isBroken = false;
+
+    expect(engine.filled).toEqual([{ text: LONG, mode: "replace" }]);
+    expect(engine.toasts).toEqual([FAILED]);
+
+    // The row's step was left behind by the failed write: Close clears it.
+    await onBand($, surface, async (ui) => {
+      if (!(await ui.keepsBeneath())) {
+        await ui.press({ key: "close" });
+      }
+    });
+    expect(await isRowEmpty($, surface)).toBe(true);
+  }
+});
+
+test("a cancel while the questions are being written leaves none behind", async ($, on) => {
+  const engine = world(on);
+  let isCancelling = false;
+  // The questions values that landed, in order.
+  const written: unknown[] = [];
+  on("state.set", async (_, e, next) => {
+    // Cancel lands while the questions are being written, before they land.
+    if (
+      isCancelling &&
+      e.key === "questions" &&
+      Array.isArray(e.value) &&
+      e.value.length > 0
+    ) {
+      isCancelling = false;
+      const ui = await $.ui.mount({ ...BAND, surface: "terminal" });
+      await ui.press({ key: "cancel" });
+      await ui.unmount();
+    }
+
+    const result = await next(e);
+
+    // A $ call's answer beneath the plugin: `{ value }`, here the write's result.
+    const landed = (result as { value?: { isSet?: boolean } }).value?.isSet;
+
+    if (e.key === "questions" && landed === true) {
+      written.push(e.value);
+    }
+
+    return result;
+  });
+
+  isCancelling = true;
+  engine.replies.push('{"questions": ["One?"]}');
+  await catchLong($);
+
+  expect(engine.filled).toEqual([{ text: LONG, mode: "replace" }]);
+  // The last questions written are none.
+  expect(written[written.length - 1]).toEqual([]);
+  for (const surface of SURFACES) {
+    expect(await isRowEmpty($, surface)).toBe(true);
+  }
+});
+
+test("/shape that fails to start says so", async ($, on) => {
+  world(on);
+  on("state.set", () => ({ deny: "state unavailable" }));
+
+  expect(await $.command.run({ ...SHAPE, args: "fix the login" })).toEqual({
+    text: "prompt-shaper could not start.",
+    isTextDisplayOnly: true,
+  });
+});
