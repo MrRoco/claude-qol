@@ -1,0 +1,17 @@
+{
+  "name": "privacy-mask",
+  "version": "0.1.0",
+  "description": "Masks emails, phone numbers, amounts, IBANs, secrets and listed names on screen while you record",
+  "author": { "name": "MrRoco" },
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "names": {
+      "type": "string",
+      "multiple": true,
+      "title": "Names to mask",
+      "description": "Client, colleague or other names to hide on screen",
+      "default": []
+    }
+  }
+}
