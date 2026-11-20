@@ -1,0 +1,8 @@
+{
+  "name": "chat-ledger",
+  "version": "0.1.0",
+  "description": "A Ledger pane listing the connectors, files, skills, commands and context files this chat used",
+  "author": { "name": "MrRoco" },
+  "license": "MIT",
+  "types": "./types/index.d.ts"
+}
