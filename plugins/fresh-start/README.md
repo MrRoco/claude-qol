@@ -17,6 +17,10 @@ Moves a long chat into a new one without losing the thread.
   prompt box of the new chat, for you to read, edit and send yourself. **Copy** puts it on the
   clipboard. **Cancel** keeps the file and closes the row.
 
+On a wide terminal (100 columns or more) the row keeps to half the width, so task-bar can put
+it beside another row; its texts are shorter there (`◆ Chat at 252k tokens.`, only the file
+name after saving), and the buttons always stay whole.
+
 The mod never starts a fresh chat or sends the handoff on its own: both happen only on your
 press. Apart from its own handoff request, it only observes the chat.
 

@@ -127,6 +127,37 @@ const formatElapsed = (ms: number): string => {
 
 const pad = (value: number): string => String(value).padStart(2, "0");
 
+// From this band width task-bar's layout puts the row beside cache-timer, so
+// the row keeps to its half: floor((columns - 1) / 2), the 1 is the gap.
+const HALF_WIDTH_FROM = 100;
+const OFFER_BUTTONS = ["Write handoff", "Not now"] as const;
+const CHOOSE_BUTTONS = ["Start fresh chat", "Copy", "Cancel"] as const;
+
+const rowColumns = (bodyColumns: number): number =>
+  bodyColumns >= HALF_WIDTH_FROM
+    ? Math.floor((bodyColumns - 1) / 2)
+    : bodyColumns;
+
+// What a button takes on the terminal: `[ label ]` plus its 1-column margin,
+// and one cell of slack for glyphs a terminal may draw two cells wide.
+const buttonColumns = (labels: readonly string[]): number =>
+  labels.reduce((sum, label) => sum + label.length + 5, 0) + 1;
+
+/** Cuts text to `room` columns, ending in `…` when cut. */
+const clip = (text: string, room: number): string => {
+  if (room <= 0) {
+    return "";
+  }
+
+  return text.length <= room
+    ? text
+    : `${text.slice(0, Math.max(0, room - 1))}…`;
+};
+
+/** The file name alone, without its folder. */
+const fileName = (path: string): string =>
+  path.slice(path.lastIndexOf("/") + 1);
+
 /** `yyyy-mm-dd-HHmm` in local time. */
 const baseName = (ms: number): string => {
   const date = new Date(ms);
@@ -750,7 +781,12 @@ export const register: Register = (on, options) => {
     }
 
     const { Box, Button, Text } = $.ui.resolve(e);
-    const columns = e.props.bodyColumns;
+    const isHalf = e.props.bodyColumns >= HALF_WIDTH_FROM;
+    const columns = rowColumns(e.props.bodyColumns);
+    // At half width the lead is cut to what its buttons leave, so the buttons
+    // never are; at full width the Text's own truncation does it, as before.
+    const fit = (text: string, labels: readonly string[]): string =>
+      isHalf ? clip(text, columns - buttonColumns(labels)) : text;
 
     // Each lead text takes what the buttons leave and is cut at its end.
     const lead = (text: string, color: string) => (
@@ -786,7 +822,12 @@ export const register: Register = (on, options) => {
 
       return (
         <Box flexDirection="row" width={columns}>
-          {lead(`◆ This chat is at ${formatTokens(tokens)} tokens.`, ACCENT)}
+          {lead(
+            isHalf
+              ? fit(`◆ Chat at ${formatTokens(tokens)} tokens.`, OFFER_BUTTONS)
+              : `◆ This chat is at ${formatTokens(tokens)} tokens.`,
+            ACCENT,
+          )}
           {button(
             "write",
             "Write handoff",
@@ -828,10 +869,20 @@ export const register: Register = (on, options) => {
         }
       }
 
+      const head = "① Writing ▕";
+      const clock = `▏ ${formatElapsed(elapsed)}`;
+      const rest = "  ② Saving  ③ Choose";
+      // Half width keeps bar and elapsed time; the step labels give way first.
+      const isShort =
+        isHalf &&
+        head.length + BAR_CELLS + clock.length + rest.length +
+          buttonColumns(["Cancel"]) >
+          columns;
+
       return (
         <Box flexDirection="row" width={columns}>
           <Box flexShrink={0}>
-            <Text color={ACCENT}>① Writing ▕</Text>
+            <Text color={ACCENT}>{isShort ? "① ▕" : head}</Text>
           </Box>
           {runs.map((run, index) => (
             <Box flexShrink={0} key={`bar-${index}`}>
@@ -843,9 +894,9 @@ export const register: Register = (on, options) => {
             </Box>
           ))}
           <Box flexShrink={0}>
-            <Text color={ACCENT}>▏ {formatElapsed(elapsed)}</Text>
+            <Text color={ACCENT}>{clock}</Text>
           </Box>
-          {later("  ② Saving  ③ Choose")}
+          {later(isShort ? "  ② ③" : rest)}
           {/* Always a way out, also after a reload lost the run's turn. */}
           {button("cancel", "Cancel", () => void pressCancel($))}
         </Box>
@@ -868,11 +919,14 @@ export const register: Register = (on, options) => {
     }
 
     if (step === "choose") {
-      const file = (await read($, fileAtom)) ?? HANDOFF_DIR;
+      const file = await read($, fileAtom);
+      const saved = isHalf
+        ? fit(`✓ ${file === null ? HANDOFF_DIR : fileName(file)}`, CHOOSE_BUTTONS)
+        : `✓ Saved ${file ?? HANDOFF_DIR}`;
 
       return (
         <Box flexDirection="row" width={columns}>
-          {lead(`✓ Saved ${file}`, SUCCESS)}
+          {lead(saved, SUCCESS)}
           {button(
             "fresh",
             "Start fresh chat",
@@ -890,7 +944,10 @@ export const register: Register = (on, options) => {
 
     return (
       <Box flexDirection="row" width={columns}>
-        {lead(`✗ ${error}`, DANGER)}
+        {lead(
+          fit(`✗ ${error}`, handoffText !== null ? ["Copy", "Close"] : ["Close"]),
+          DANGER,
+        )}
         {handoffText !== null &&
           button("copy", "Copy", (press) => void pressCopy($, press.surface))}
         {button("close", "Close", () => void pressCancel($))}
