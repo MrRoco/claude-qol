@@ -1186,10 +1186,10 @@ test("the choose row shows only the file name at half width, the path at 80", as
 
   for (const surface of SURFACES) {
     await onBandAt($, surface, 120, async (ui) => {
-      // 59 columns less the three buttons (41) leaves 18 for the name.
+      // 59 columns less the three buttons (41) and 1 of slack leaves 17.
       const saved = await ui.find({ type: "Text", text: /✓/ });
-      expect(saved?.text).toBe(`✓ ${BASE}…`);
-      expect(saved?.text.length).toBe(18);
+      expect(saved?.text).toBe(`✓ ${BASE.slice(0, -1)}…`);
+      expect(saved?.text.length).toBe(17);
       expect(saved?.props.color).toBe("success");
       expect(await ui.find({ type: "Button", key: "fresh" })).toBeDefined();
       expect(await ui.find({ type: "Button", key: "copy" })).toBeDefined();
@@ -1218,9 +1218,9 @@ test("the failed row clips its error at half width; the buttons stay whole", asy
 
   for (const surface of SURFACES) {
     await onBandAt($, surface, 120, async (ui) => {
-      // 59 columns less Copy (9) and Close (10) leaves 40.
+      // 59 columns less Copy (9), Close (10) and 1 of slack leaves 39.
       const shown = await ui.find({ type: "Text", text: /✗/ });
-      expect(shown?.text).toBe(`${error.slice(0, 39)}…`);
+      expect(shown?.text).toBe(`${error.slice(0, 38)}…`);
       expect(shown?.props.color).toBe("error");
       expect(await ui.find({ type: "Button", key: "copy" })).toBeDefined();
       expect(await ui.find({ type: "Button", key: "close" })).toBeDefined();

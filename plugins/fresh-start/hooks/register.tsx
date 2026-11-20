@@ -138,9 +138,10 @@ const rowColumns = (bodyColumns: number): number =>
     ? Math.floor((bodyColumns - 1) / 2)
     : bodyColumns;
 
-// What a button takes on the terminal: `[ label ]` plus its 1-column margin.
+// What a button takes on the terminal: `[ label ]` plus its 1-column margin,
+// and one cell of slack for glyphs a terminal may draw two cells wide.
 const buttonColumns = (labels: readonly string[]): number =>
-  labels.reduce((sum, label) => sum + label.length + 5, 0);
+  labels.reduce((sum, label) => sum + label.length + 5, 0) + 1;
 
 /** Cuts text to `room` columns, ending in `…` when cut. */
 const clip = (text: string, room: number): string => {
