@@ -34,6 +34,11 @@
       "name": "prompt-shaper",
       "source": "./plugins/prompt-shaper",
       "description": "Catches a long prompt, asks a few questions about gaps, and turns it into a clear brief in the prompt box"
+    },
+    {
+      "name": "replay-theater",
+      "source": "./plugins/replay-theater",
+      "description": "Step through the file edits Claude made in the last turn, one diff at a time"
     }
   ]
 }

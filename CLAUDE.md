@@ -59,3 +59,4 @@ scripts/check.sh                       # validate the marketplace and every mod,
 - `.plan/phase6-contract.md` — chat-ledger
 - `.plan/phase5-contract.md` — lesson-saver
 - `.plan/phase4-contract.md` — prompt-shaper
+- `.plan/phase8-contract.md` — replay-theater
