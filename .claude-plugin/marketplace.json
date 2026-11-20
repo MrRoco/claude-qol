@@ -39,6 +39,11 @@
       "name": "replay-theater",
       "source": "./plugins/replay-theater",
       "description": "Step through the file edits Claude made in the last turn, one diff at a time"
+    },
+    {
+      "name": "privacy-mask",
+      "source": "./plugins/privacy-mask",
+      "description": "Masks emails, phone numbers, amounts, IBANs, secrets and listed names on screen while you record"
     }
   ]
 }

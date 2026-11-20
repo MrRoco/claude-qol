@@ -13,7 +13,7 @@ Each mod is a small plugin that adds a helper or changes what you see while you 
 | `prompt-shaper`  | Turn a loose prompt into a clear brief                                 | 0.1.0   |
 | `lesson-saver`   | Save a correction as a lasting rule                                    | 0.1.0   |
 | `chat-ledger`    | What this chat used: tools, files, skills                              | 0.1.0   |
-| `privacy-mask`   | Hide personal details on screen while recording                        | planned |
+| `privacy-mask`   | Hide personal details on screen while recording                        | 0.1.0   |
 | `replay-theater` | Step through the last turn's file edits (Anthropic sample, Apache 2.0) | 0.1.0   |
 | `mod-switch`     | Turn mods on and off from one panel                                    | planned |
 
