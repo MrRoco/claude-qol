@@ -23,10 +23,36 @@ Claude Code 2.1.328 or later (tested version). Check with `claude --version`.
 
 ## Install
 
+Add the marketplace once, then install the mods you want:
+
 ```bash
 claude plugin marketplace add MrRoco/claude-qol
-claude plugin install <mod>@qol
+claude plugin install task-bar@qol
 ```
+
+All nine at once:
+
+```bash
+for m in task-bar fresh-start cache-timer prompt-shaper lesson-saver chat-ledger privacy-mask replay-theater mod-switch; do
+  claude plugin install "$m@qol"
+done
+```
+
+In a chat that was already open, run `/reload-plugins`. Settings for mods that have them
+(fresh-start, prompt-shaper, lesson-saver, privacy-mask) are in `/config`.
+
+## Update
+
+```bash
+claude plugin marketplace update qol
+claude plugin update <mod>@qol
+```
+
+## Organizations
+
+Some mods use classic hooks or read and write files (see each mod's README for what and why).
+Under a security policy such as `cc-plugin-sec-default`, an admin may need to approve a mod
+before all of its hooks run.
 
 ## Develop
 

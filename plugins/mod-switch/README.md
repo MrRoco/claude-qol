@@ -4,8 +4,7 @@ One place to see which mods you have and turn them on or off, without editing se
 
 - **A Mods pane.** `/mods` opens a pane with one row per installed mod: its name, marketplace,
   version and a short description. A mod is a plugin with a hooks module; plugins that only
-  bring skills, commands or MCP servers are left out. Mods from any marketplace are listed,
-  and so are mods loaded with `--plugin-dir`.
+  bring skills, commands or MCP servers are left out. Mods from any marketplace are listed.
 - **On or off for every chat.** Each row has a button that reads `● on` or `○ off`. Pressing
   it changes the setting in the same scope the mod was installed in (user, project or local),
   so the change holds in every new chat, not just this one.
@@ -64,3 +63,6 @@ Saved sets are kept in the mod's own storage, as set names and plugin ids only.
   the next time you open `/mods`.
 - The pane does not show a mod's errors or skipped hooks: Claude Code does not pass those on to
   other mods.
+- Mods loaded with `--plugin-dir` usually do not show: the `claude plugin list` command does
+  not know a session's `--plugin-dir` folders, and mod-switch only hears about mods that load
+  after it. Install mods from a marketplace to manage them here.
