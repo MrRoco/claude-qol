@@ -29,6 +29,11 @@
       "name": "lesson-saver",
       "source": "./plugins/lesson-saver",
       "description": "Notices when you correct Claude and offers to save the fix as a rule in CLAUDE.md"
+    },
+    {
+      "name": "prompt-shaper",
+      "source": "./plugins/prompt-shaper",
+      "description": "Catches a long prompt, asks a few questions about gaps, and turns it into a clear brief in the prompt box"
     }
   ]
 }
