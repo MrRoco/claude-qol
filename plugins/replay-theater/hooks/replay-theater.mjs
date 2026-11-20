@@ -1,5 +1,6 @@
 // Copyright 2026 Anthropic PBC
 // SPDX-License-Identifier: Apache-2.0
+// Modified by MrRoco, 2026: qol restyle, tests, matched hooks (see NOTICE).
 //
 // Replay Theater: records the file edits Claude makes in a turn, then lets you
 // step through them in a pane, one diff at a time.
@@ -9,10 +10,11 @@
 const PANE_ID = "replay-theater";
 const MAX_DIFF_LINES = 12;
 const MAX_LCS_LINES = 400;
-const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit"]);
 
 // Module state. `pending` fills during a turn; `replay` is the last finished
 // turn's steps, the ones the pane shows.
+/** @typedef {{ tool: string, file: string, diff: { op: string, t: string }[], note: string }} Step */
+/** @type {{ pending: Step[], replay: Step[], index: number, isOpen: boolean, inBand: boolean, turns: number }} */
 const state = { pending: [], replay: [], index: 0, isOpen: false, inBand: false, turns: 0 };
 
 function relPath(cwd, path) {
@@ -80,11 +82,11 @@ async function stepsFor($, e) {
   try { cwd = await $.session.cwd(); } catch { /* keep the full path */ }
   const file = relPath(cwd, e.file_path);
   if (e.tool === "Edit") {
-    return [{ tool: "Edit", file, diff: diffLines(e.old_string, e.new_string), note: e.replace_all ? "replace all" : "" }];
+    return [{ tool: "Edit", file, diff: diffLines(e.old_string, e.new_string), note: e.replace_all ? "all occurrences" : "" }];
   }
   if (e.tool === "MultiEdit" && Array.isArray(e.edits)) {
     return e.edits.map((ed, k) => ({
-      tool: "MultiEdit", file, diff: diffLines(ed.old_string, ed.new_string), note: `edit ${k + 1} of ${e.edits.length}`,
+      tool: "MultiEdit", file, diff: diffLines(ed.old_string, ed.new_string), note: `change ${k + 1} of ${e.edits.length}`,
     }));
   }
   if (e.tool === "Write") {
@@ -96,14 +98,14 @@ async function stepsFor($, e) {
         isNew = false;
       }
     } catch { /* unreadable: show it as a new file */ }
-    return [{ tool: "Write", file, diff: diffLines(before, e.content), note: isNew ? "new file" : "rewrite" }];
+    return [{ tool: "Write", file, diff: diffLines(before, e.content), note: isNew ? "new file" : "whole file" }];
   }
   return [];
 }
 
 function hintText() {
   const n = state.replay.length;
-  return `▶ Replay: ${n} edit${n === 1 ? "" : "s"} (press r)`;
+  return `▶ ${n} file edit${n === 1 ? "" : "s"} in the last turn`;
 }
 
 async function openReplay($) {
@@ -115,7 +117,7 @@ async function openReplay($) {
   $.ui.invalidate("ui.render");
   await $.clock.sleep(200);
   const rows = Math.min(MAX_DIFF_LINES + 8, 22);
-  const placed = await $.ui.open({ id: PANE_ID, title: "Replay Theater", focus: true, closeOnEscape: true, rows, columns: 58 });
+  const placed = await $.ui.open({ id: PANE_ID, title: "Replay", focus: true, closeOnEscape: true, rows, columns: 58 });
   // No room for a pane (a narrow terminal): draw the replay in the band.
   state.inBand = placed?.isPlaced === false;
   $.ui.invalidate("ui.render");
@@ -128,7 +130,7 @@ function replayView($, e, inBand) {
     const { Box, Text, Button } = $.ui.resolve(e);
     const maxDiff = inBand ? Math.max(3, Math.min(MAX_DIFF_LINES, (e.maxRows || 20) - 7)) : MAX_DIFF_LINES;
     const total = state.replay.length;
-    if (!total) return Text({ dimColor: true, children: "No edits to replay." });
+    if (!total) return Text({ dimColor: true, children: "The last turn made no file edits." });
     const k = Math.max(0, Math.min(state.index, total - 1));
     const step = state.replay[k];
     const width = Math.max(40, (e.bodyColumns || 100) - 4);
@@ -136,7 +138,7 @@ function replayView($, e, inBand) {
     const shown = step.diff.slice(0, maxDiff);
 
     const diffRows = shown.map((l, n) => {
-      const color = l.op === "+" ? "green" : l.op === "-" ? "red" : undefined;
+      const color = l.op === "+" ? "success" : l.op === "-" ? "error" : undefined;
       const line = `${l.op === "~" ? " " : l.op} ${l.t}`.slice(0, width);
       return Text({ key: `d${n}`, color, dimColor: l.op === " " || l.op === "~", wrap: "truncate-end", children: line });
     });
@@ -145,7 +147,7 @@ function replayView($, e, inBand) {
 
     // The step list: one cell per step, the current one highlighted.
     const strip = state.replay.map((s, n) =>
-      Text({ key: `s${n}`, inverse: n === k, color: n === k ? "cyan" : undefined, dimColor: n !== k, children: ` ${n + 1} ` }));
+      Text({ key: `s${n}`, inverse: n === k, color: n === k ? "claude" : undefined, dimColor: n !== k, children: ` ${n + 1} ` }));
 
     const go = (to) => { state.index = Math.max(0, Math.min(to, total - 1)); $.ui.invalidate("ui.render"); };
     const close = () => {
@@ -156,22 +158,22 @@ function replayView($, e, inBand) {
     };
 
     return Box({
-      flexDirection: "column", borderStyle: "round", borderColor: "magenta", paddingX: 1,
+      flexDirection: "column", borderStyle: "round", borderColor: "claude", paddingX: 1,
       children: [
         Box({ flexDirection: "row", justifyContent: "space-between", children: [
-          Text({ bold: true, color: "magenta", children: "▶ Replay Theater" }),
-          Text({ bold: true, children: `step ${k + 1} of ${total}` }),
+          Text({ weight: "bold", color: "claude", children: "▶ Replay" }),
+          Text({ weight: "bold", children: `edit ${k + 1} of ${total}` }),
         ] }),
         Box({ flexDirection: "row", children: strip }),
-        Text({ bold: true, color: "cyan", wrap: "truncate-start", children: step.file }),
+        Text({ weight: "bold", wrap: "truncate-start", children: step.file }),
         Box({ flexDirection: "row", gap: 2, children: [
           Text({ dimColor: true, children: `${step.tool}${step.note ? " · " + step.note : ""}` }),
-          Text({ color: "green", children: `+${add}` }),
-          Text({ color: "red", children: `-${del}` }),
+          Text({ color: "success", children: `+${add}` }),
+          Text({ color: "error", children: `-${del}` }),
         ] }),
         Box({ flexDirection: "column", marginTop: 1, children: diffRows }),
         Box({ flexDirection: "row", gap: 2, marginTop: 1, children: [
-          Button({ key: "prev", label: "◀ Prev", hotkey: "p", onPress: () => go(k - 1) }),
+          Button({ key: "prev", label: "◀ Previous", hotkey: "p", onPress: () => go(k - 1) }),
           Button({ key: "next", label: "Next ▶", hotkey: "n", autoFocus: true, onPress: () => go(k + 1) }),
           Button({ key: "close", label: "Close", hotkey: "c", onPress: close }),
         ] }),
@@ -179,29 +181,36 @@ function replayView($, e, inBand) {
     });
 }
 
+/**
+ * @param {import("claude-code").On} on
+ * @param {import("claude-code").PluginOptions} options
+ */
 export function register(on, options) {
   // Slash command: /replay opens the pane.
   on("session.start", async ($, e, next) => {
     const r = await next(e);
-    await $.command.register({ name: "replay", description: "Replay Theater: step through the last turn's file edits" });
+    await $.command.register({ name: "replay", description: "Step through the last turn's file edits" });
     return r;
   });
 
   on("command.run", { command: "replay" }, async ($, e) => {
     const opened = await openReplay($);
-    return { text: opened ? `Replay Theater: ${state.replay.length} edits` : "Replay Theater: no edits in the last turn." };
+    const n = state.replay.length;
+    return { text: opened ? `Replaying ${n} edit${n === 1 ? "" : "s"}.` : "The last turn made no file edits." };
   });
 
-  // Record each edit, then let it run. Never blocks the call.
-  on("tool.call", async ($, e, next) => {
-    if (EDIT_TOOLS.has(e.tool)) {
+  // Record each main-loop edit, then let it run. Never blocks the call.
+  // Subagent edits are left out: the replay covers the main turn only.
+  // MultiEdit is matched by pattern: the 2.1.328 tool types no longer list it.
+  on("tool.call", { tool: ["Edit", "Write", /^MultiEdit$/] }, async ($, e, next) => {
+    if (!e.agentId) {
       try {
         const steps = await stepsFor($, e);
         state.pending.push(...steps);
       } catch { /* recording must never stop the edit */ }
     }
     return next(e);
-  });
+  }).catch(($, e, next) => next(e));
 
   on("turn.start", ($, e, next) => {
     if (!e.agentId) state.pending = [];
@@ -228,7 +237,7 @@ export function register(on, options) {
     return Box({
       flexDirection: "row", gap: 2, paddingX: 1,
       children: [
-        Text({ color: "magenta", bold: true, children: hintText() }),
+        Text({ color: "claude", weight: "bold", children: hintText() }),
         Button({ key: "open-replay", label: "Replay", hotkey: "r", onPress: () => openReplay($) }),
       ],
     });
@@ -242,8 +251,8 @@ export function register(on, options) {
 
   // The person closed the pane (Escape): keep our flag in step.
   on("ui.close", ($, e, next) => {
-    if (e.id === PANE_ID || e.requestId === PANE_ID) state.isOpen = false;
+    if (e.id === PANE_ID) state.isOpen = false;
     $.ui.invalidate("ui.render");
     return next(e);
-  });
+  }).catch(($, e, next) => next(e));
 }

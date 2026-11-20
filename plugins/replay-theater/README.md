@@ -1,135 +1,61 @@
-# Replay Theater
+# replay-theater
 
-A Claude Code mod that lets you step through the file edits Claude made in the last turn, one diff at a time. We're sharing it as an example of a mod that records tool calls without changing them and gives you a pane with buttons to review them afterwards.
+Step through the file edits Claude made in the last turn, one diff at a time.
 
-## What this shows
+This is a modified copy of the `replay-theater` sample mod from Anthropic's
+[claude-code-playground](https://github.com/anthropics/claude-code-playground/tree/main/claude-code/mods/replay-theater)
+repository, restyled for the qol marketplace. It is not an official Anthropic product and is
+not endorsed by Anthropic. It is licensed under the Apache License 2.0 (see `LICENSE`); the
+changes are listed in `NOTICE`.
 
-While a turn runs, Replay Theater records each file edit Claude makes (the Edit, Write and MultiEdit tool calls): the file, and the text before and after. When the turn ends, a hint appears above the prompt:
+- **Hint above the prompt.** After a turn in which Claude edited files, a row above the prompt
+  says how many edits there were (`▶ 3 file edits in the last turn`) with a **Replay** button
+  (hotkey `r`).
+- **One edit at a time.** `/replay` or the button opens a side pane with one edit per step: the
+  file, a line diff with added and removed lines in your theme's success and error colours,
+  the `+N` / `-N` counts, and **◀ Previous**, **Next ▶** and **Close**.
+- **Main turn only.** Edits by subagents are left out.
 
-```text
-▶ Replay: 5 edits (press r)  [ Replay ]
+## Install
+
+```bash
+claude plugin marketplace add MrRoco/claude-qol
+claude plugin install replay-theater@qol
 ```
 
-Open it, and a pane shows one edit at a time: the file, the tool, a count of added and removed lines, and a short diff in red and green. A strip of numbered cells shows every step, with the current one highlighted, and the header reads "step 2 of 5". Prev, Next and Close buttons move through the steps.
+## Use
 
-Replay Theater only watches. It never blocks, changes or delays an edit.
+- `/replay` opens the pane for the last turn that edited files.
+- In the pane: `n` next edit, `p` previous edit, `c` or `Escape` closes it. Mouse clicks on the
+  buttons work too.
+- To reach the hint's button from the keyboard, focus the row above the prompt and press `r`.
+- A turn without edits keeps the previous replay; the next turn with edits replaces it.
 
-The patterns it demonstrates:
+## What each step shows
 
-- Recording from `tool.call` and always passing the call on with `next(e)`.
-- Grouping work by turn with `turn.start` and `turn.complete`, and skipping subagent turns.
-- A slash command (`/replay`) registered from `session.start` and handled in `command.run`.
-- A `Pane` with `Button` elements and hotkeys, with a fallback to the `AbovePrompt` band.
+- **Edit:** the diff between the old and the new text of that edit, not the whole file. A
+  replace-all edit is noted as `all occurrences`.
+- **MultiEdit:** one step per change, noted as `change 2 of 3`.
+- **Write:** the diff between the file on disk just before the write and the new content, noted
+  as `whole file`, or `new file` when the file did not exist yet.
+- Up to 12 diff lines per step, then `… 12 more lines`. Unchanged lines show only next to a
+  change; a skipped run shows as `⋯`. Files over 400 lines show as all removed, then all added.
 
-## Demo
+## Limits
 
-After a rename, the hint above the prompt:
+- Edits are recorded when the tool is called, so an edit you deny, or that fails, still shows.
+- The replay lives in memory only and is gone after a restart or a reload of the mod.
+- When the terminal has no room for a side pane, the replay draws in the row above the prompt
+  instead.
+- MultiEdit is handled for builds that have that tool; Claude Code 2.1.328 does not list it.
 
-![The Replay hint above the prompt after a turn with five edits](screenshots/replay-theater-hint.png)
+## Privacy
 
-The pane, on step 1 of 5:
+To diff a Write, the mod reads the file that is about to be replaced. File contents stay in
+memory for the replay and show on screen only when you open it. Nothing is written, logged or
+sent anywhere.
 
-![The Replay Theater pane showing step 1 of 5](screenshots/replay-theater-pane.png)
+## License
 
-A Write step for a new file, capped at 12 lines:
-
-![A Write step for a new file, with the diff capped at 12 lines](screenshots/replay-theater-write.png)
-
-Inline above the prompt in an 80-column terminal:
-
-![The pane drawn inline in an 80-column terminal](screenshots/replay-theater-80-columns.png)
-
-## How it was built
-
-- **Model:** built with Claude in Claude Code. The test runs and screenshots used Claude Sonnet 5. The mod itself doesn't call a model.
-- **Prompt(s):** the mod started as one of ten ideas Claude wrote for mods. This is the idea as written:
-
-  > **Replay Theater.** _Scrub through what Claude just did._ After a turn, a pane opens with a timeline of every edit. Buttons step forward and back, and each step shows its diff. It uses `ui.render` on `Pane`, with `Button` elements, and it records each edit from `tool.call`. It builds on the built-in diff mod. A developer would install it to review a long run in a minute, and it makes a strong demo clip. _A bigger project,_ because the timeline needs its own state.
-
-  The build prompt, which picked this idea and two others by number:
-
-  > implement 1,2,7. give me zips for them. test them in claude code and get me screenshots of what they look like when used.
-
-- **Transcript:** not shared. The build ran in an internal workspace.
-- **Iterations:**
-  - The idea had the pane open by itself after each turn. The built mod shows a one-line hint above the prompt instead, and opens the pane when you ask for it with `/replay` or the Replay button.
-  - A pane only takes the keyboard while nothing else holds it. When the band's Replay button is pressed, the band holds the keys, so the mod hides the band and waits briefly before it opens the pane.
-  - A Write can replace a whole file, so the diff keeps only one line of context around each change, and caps each step at 12 lines.
-  - Tested in Claude Code: a rename across three files made 5 edits, and the pane stepped through all of them with Prev, Next and Close. A Write of a new file showed as one step.
-
-## Run it
-
-**Requirements:**
-
-- Claude Code 2.1.287 or later, where mods load by default. The mod was built and tested on 2.1.280, and `claude plugin validate` passes on 2.1.285.
-- A terminal. The pane is placed inline above the prompt, or docked to the right in the fullscreen layout.
-
-No environment variables or configuration.
-
-**Steps:**
-
-1. Clone this repository and go to this folder's parent:
-
-   ```bash
-   git clone https://github.com/anthropics/claude-code-playground.git
-   cd claude-code-playground/claude-code/mods
-   ```
-
-2. Check the plugin:
-
-   ```bash
-   claude plugin validate ./replay-theater
-   ```
-
-3. Try it for one session:
-
-   ```bash
-   claude --plugin-dir ./replay-theater
-   ```
-
-   Or install it, with the other mods here, from the local marketplace in this folder (see the [mods README](../README.md)):
-
-   ```bash
-   claude plugin marketplace add ./
-   claude plugin install replay-theater@claude-code-playground-mods --scope user
-   ```
-
-4. Ask Claude for a change that edits files, for example "rename the function greet to welcome everywhere".
-5. When the turn ends, open the replay in one of two ways:
-   - Type `/replay` and press Enter.
-   - Press `ctrl+x` then `Tab` to focus the band above the prompt, then press `r` (or Enter on the Replay button).
-6. In the pane:
-
-   | Key | Does |
-   |---|---|
-   | `n` | Next step |
-   | `p` | Previous step |
-   | `c` or `Escape` | Close the pane |
-
-   Mouse clicks on the buttons work too. The replay stays available until the next turn that edits files. A turn with no edits keeps the previous replay.
-
-## Notes / limitations
-
-- The diff shows up to 12 lines per step, then "… N more lines". Unchanged lines are kept only next to a change, and a skipped run shows as "⋯".
-- For Edit, the diff is between `old_string` and `new_string`, not the whole file. The file's line numbers aren't shown.
-- For Write, the old text is read from disk just before the write. Files over 400 lines are shown as all removed, then all added, with no line matching.
-- Edits are recorded when the tool is called. An edit that you then deny, or that fails, still shows in the replay.
-- The replay is kept in memory for the current session only. It is lost when Claude Code restarts, or when the plugin reloads.
-- Edits made by subagents are included in the main turn's replay.
-- Claude Code 2.1.280 has no MultiEdit tool. The mod handles MultiEdit, one step per edit, for builds that have it. That path is untested.
-- If the terminal can't place a pane, the replay is drawn in the band above the prompt instead. That fallback is untested, because every width we tried (80 and 120 columns) placed the pane.
-- The band above the prompt is shared. If another mod also draws there, only one of them shows.
-
-## Dependencies
-
-| Name | Version | License (SPDX) | Source |
-| --- | --- | --- | --- |
-| None | | | |
-
-## Third-party notices
-
-None.
-
----
-
-Shared as-is as part of claude-code-playground. Not an official Anthropic product; no support or maintenance is implied. See the root README and LICENSE.
+Apache License 2.0, see `LICENSE` and `NOTICE`. Based on replay-theater from
+anthropics/claude-code-playground, Copyright 2026 Anthropic PBC.

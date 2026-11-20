@@ -1,0 +1,34 @@
+replay-theater
+Based on replay-theater from anthropics/claude-code-playground, Copyright 2026 Anthropic PBC, licensed under the Apache License 2.0.
+Source: https://github.com/anthropics/claude-code-playground/tree/main/claude-code/mods/replay-theater
+
+Modified by MrRoco. Changes, 20-11-2026:
+
+- hooks/replay-theater.mjs: added a "Modified by" line under the original copyright header.
+- hooks/replay-theater.mjs: fixed colour names replaced by theme colour names: border, title,
+  hint and active step use "claude" (was magenta / cyan), added lines and +N use "success"
+  (was green), removed lines and -N use "error" (was red); the file path is drawn in the
+  default colour (was cyan).
+- hooks/replay-theater.mjs: the deprecated "bold" text prop replaced by weight "bold".
+- hooks/replay-theater.mjs: own texts: pane title "Replay", heading "▶ Replay", step
+  "edit N of M", empty "The last turn made no file edits.", notes "all occurrences",
+  "change N of M" and "whole file", hint "▶ N file edits in the last turn", button
+  "◀ Previous", command description "Step through the last turn's file edits", replies
+  "Replaying N edits." / "The last turn made no file edits.".
+- hooks/replay-theater.mjs: the tool.call hook is matched on Edit, Write and MultiEdit
+  (MultiEdit by pattern, as the 2.1.328 tool types no longer list it) instead of filtering a
+  matcher-less hook; the tool name set was removed.
+- hooks/replay-theater.mjs: edits made by subagents (tool calls with an agentId) are no longer
+  recorded; the replay covers the main turn only.
+- hooks/replay-theater.mjs: .catch handlers that pass the event on added to the gating
+  tool.call and ui.close hooks.
+- hooks/replay-theater.mjs: the ui.close hook checks only the event's id (dropped a requestId
+  check on a field that event does not have).
+- hooks/replay-theater.mjs: JSDoc types for the module state and the register function, so
+  the file type-checks against the Claude Code types.
+- .claude-plugin/plugin.json: own description, author MrRoco, license Apache-2.0.
+- README.md: replaced by an own README describing this modified copy.
+- tests/replay-theater.test.ts: added.
+- LICENSE: copied from the root of anthropics/claude-code-playground.
+- NOTICE: added.
+- Screenshots of the original were not copied.
