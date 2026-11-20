@@ -1,0 +1,23 @@
+{
+  "name": "prompt-shaper",
+  "version": "0.1.0",
+  "description": "Catches a long prompt, asks a few questions about gaps, and turns it into a clear brief in the prompt box",
+  "author": { "name": "MrRoco" },
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "minLength": {
+      "type": "number",
+      "title": "Catch prompts from (characters)",
+      "description": "Typed prompts at least this long are shaped before sending",
+      "default": 600
+    },
+    "model": {
+      "type": "string",
+      "title": "Model for shaping",
+      "description": "Model used for the side requests",
+      "default": "haiku",
+      "options": ["haiku", "sonnet"]
+    }
+  }
+}
