@@ -9,3 +9,6 @@ plugins/*/tsconfig.json
 
 # Local planning files (scope, phase contracts), not published
 .plan/
+
+# Agent worktrees
+.claude/worktrees/
