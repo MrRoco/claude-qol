@@ -9,7 +9,7 @@ Each mod is a small plugin that adds a helper or changes what you see while you 
 | ---------------- | ---------------------------------------------------------------------- | ------- |
 | `task-bar`       | Progress of Claude's to-do list and subagents                          | 0.1.0   |
 | `fresh-start`    | Hand a long chat over to a fresh one                                   | 0.1.0   |
-| `cache-timer`    | Time left before the prompt cache goes cold                            | planned |
+| `cache-timer`    | Time left before the prompt cache goes cold                            | 0.1.0   |
 | `prompt-shaper`  | Turn a loose prompt into a clear brief                                 | planned |
 | `lesson-saver`   | Save a correction as a lasting rule                                    | planned |
 | `chat-ledger`    | What this chat used: tools, files, skills                              | planned |

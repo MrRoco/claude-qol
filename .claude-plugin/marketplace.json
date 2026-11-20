@@ -14,6 +14,11 @@
       "name": "fresh-start",
       "source": "./plugins/fresh-start",
       "description": "Offers a handoff when a chat grows large, saves it in the project, then starts a fresh chat with it or copies it"
+    },
+    {
+      "name": "cache-timer",
+      "source": "./plugins/cache-timer",
+      "description": "Counts down above the prompt until the chat's prompt cache goes cold, with a Keep warm button"
     }
   ]
 }
