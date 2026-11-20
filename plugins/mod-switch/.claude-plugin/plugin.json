@@ -1,0 +1,8 @@
+{
+  "name": "mod-switch",
+  "version": "0.1.0",
+  "description": "A Mods pane to turn every installed mod on or off, with named sets",
+  "author": { "name": "MrRoco" },
+  "license": "MIT",
+  "types": "./types/index.d.ts"
+}
