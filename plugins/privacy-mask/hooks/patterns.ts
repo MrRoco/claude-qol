@@ -12,25 +12,38 @@ const MIN_NAME_LENGTH = 2;
 // Secrets come first: a key's value may hold an email or digits that a later
 // rule would only partly cover.
 const SECRET_PREFIX =
-  /(?<![\w-])(?:sk_live_|sk-|ghp_|gho_|xox[bap]-|glpat-)[A-Za-z0-9_-]{8,}/g;
+  /(?<![\w-])(?:sk_live_|sk_test_|sk-|ghp_|gho_|xox[bap]-|glpat-)[A-Za-z0-9_-]{8,}/g;
 const AWS_KEY = /(?<![A-Za-z0-9])AKIA[0-9A-Z]{16}(?![A-Za-z0-9])/g;
 const GOOGLE_KEY = /(?<![\w-])AIza[0-9A-Za-z_-]{20,}/g;
-const BEARER = /(\bBearer\s+)[A-Za-z0-9._~+/-]+=*/g;
+// Any case; a token of 8 or more characters keeps prose ("bearer of") out.
+const BEARER = /(\bbearer\s+)[A-Za-z0-9._~+/-]{8,}=*/gi;
 // A JWT's header is base64url JSON, so it opens with `eyJ` (`{"`); requiring
 // that keeps dotted names such as `example.config.json` out.
 const JWT =
   /(?<![\w-])eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}/g;
 const SECRET_WORD = "(?:key|token|secret|pass|pwd)";
-// `"api_key": "value"`: the name stays, the value goes.
+const SECRET_NAME = new RegExp(SECRET_WORD, "i");
+// The parts of a name around the secret word are bounded: unbounded, a long
+// run such as `keykeykey…` makes the engine retry every split (quadratic).
+const NAME_PART = "[\\w.-]{0,64}";
+const QUOTED_NAME_PART = '[^"\\n]{0,64}';
+// `"api_key": "value"`: the name stays, the value goes. Escaped quotes inside
+// the value (`\\"`) belong to it.
 const JSON_SECRET = new RegExp(
-  `("[^"\\n]*${SECRET_WORD}[^"\\n]*"\\s*:\\s*")([^"\\n]+)(")`,
+  `("${QUOTED_NAME_PART}${SECRET_WORD}${QUOTED_NAME_PART}"\\s*:\\s*")((?:[^"\\\\\\n]|\\\\.)+)(")`,
   "gi",
 );
 // `API_KEY=value`, `password = 'two words'`, `?token=abc&x=1`. `==` is a
 // comparison in code, not an assignment, so it is left alone.
 const ASSIGNED_SECRET = new RegExp(
-  `((?<![\\w.-])[\\w.-]*${SECRET_WORD}[\\w.-]*\\s*=\\s*)(?!=)(?:"([^"\\n]*)"|'([^'\\n]*)'|([^\\s"'\`&]+))`,
+  `((?<![\\w.-])${NAME_PART}${SECRET_WORD}${NAME_PART}\\s*=\\s*)(?!=)(?:"([^"\\n]*)"|'([^'\\n]*)'|([^\\s"'\`&]+))`,
   "gi",
+);
+// YAML-style `api_key: value`, only at the start of a line (indent or a list
+// dash allowed), so prose such as "Key: the plan" mid-sentence is left.
+const YAML_SECRET = new RegExp(
+  `^([ \\t]*(?:-[ \\t]+)?${NAME_PART}${SECRET_WORD}${NAME_PART}[ \\t]*:[ \\t]+)(?:"([^"\\n]*)"|'([^'\\n]*)'|([^\\s#][^\\n#]*?))(?=[ \\t]*(?:#|$))`,
+  "gim",
 );
 
 const EMAIL =
@@ -39,19 +52,23 @@ const EMAIL =
 // Greedy on purpose: the callback trims back to the longest part that passes
 // the mod-97 check, so a word written after an IBAN does not hide it.
 const IBAN_CANDIDATE =
-  /(?<![A-Za-z0-9])[A-Z]{2}\d{2}(?: ?[A-Z0-9]){11,30}(?![A-Za-z0-9])/g;
+  /(?<![A-Za-z0-9])[A-Za-z]{2}\d{2}(?: ?[A-Za-z0-9]){11,30}(?![A-Za-z0-9])/g;
 const IBAN_MIN_LENGTH = 15;
 
 // Postcode plus house number; a postcode alone is not personal enough to hide.
+// Letters in any case when written against the digits (`1234ab 12`); with a
+// space between, capitals only, so prose such as `in 2024 is 12` is left.
 const POSTCODE_NUMBER =
-  /(?<![\w])[1-9]\d{3} ?[A-Z]{2}\s+\d{1,5}(?:[ -]?[A-Za-z](?![A-Za-z])|-\d{1,4})?(?![\w])/g;
+  /(?<![\w])[1-9]\d{3}(?:[A-Za-z]{2}| [A-Z]{2})\s+\d{1,5}(?:[ -]?[A-Za-z](?![A-Za-z])|-\d{1,4})?(?![\w])/g;
 
 // Nine digits, with spaces or dots between groups; checked with the 11-check.
 const BSN_CANDIDATE = /(?<![\d.,])\d(?:[ .]?\d){8}(?![ .,]?\d)/g;
 
+// `+31 6 …` and the `0031 6 …` dialling form.
 const PHONE_INTERNATIONAL =
-  /(?<![\w+])\+\d{1,3}(?:[ .-]?\(?\d\)?){7,13}(?![\d])/g;
-const PHONE_DUTCH = /(?<![\w+.,])0(?:[ .-]?\d){9}(?![\d])/g;
+  /(?<![\w+])(?:\+|00)\d{1,3}(?:[ .-]?\(?\d\)?){7,13}(?![\d])/g;
+// `06-12345678`, `020 123 4567` and `(020) 123 4567`.
+const PHONE_DUTCH = /(?<![\w+.,(])\(?0(?:[ .-]?\)?[ .-]?\d){9}(?![\d])/g;
 const MIN_PHONE_DIGITS = 9;
 
 const AMOUNT = "\\d(?:[\\d.,]*\\d)?(?:,-)?";
@@ -137,6 +154,24 @@ const maskPhones = (text: string): string => {
     .replace(PHONE_DUTCH, keepShort);
 };
 
+/** Rebuilds `name = value` (or `name: value`) with the value masked; empty values stay. */
+const maskAssigned = (
+  match: string,
+  head: string,
+  doubleQuoted: string | undefined,
+  singleQuoted: string | undefined,
+  bare: string | undefined,
+): string => {
+  if (doubleQuoted !== undefined) {
+    return doubleQuoted === "" ? match : `${head}"${BAR}"`;
+  }
+  if (singleQuoted !== undefined) {
+    return singleQuoted === "" ? match : `${head}'${BAR}'`;
+  }
+
+  return bare === undefined || bare === "" ? match : `${head}${BAR}`;
+};
+
 const maskSecrets = (text: string): string =>
   text
     .replace(
@@ -144,30 +179,16 @@ const maskSecrets = (text: string): string =>
       (_match, head: string, _value: string, tail: string) =>
         `${head}${BAR}${tail}`,
     )
-    .replace(
-      ASSIGNED_SECRET,
-      (
-        match: string,
-        head: string,
-        doubleQuoted: string | undefined,
-        singleQuoted: string | undefined,
-        bare: string | undefined,
-      ) => {
-        if (doubleQuoted !== undefined) {
-          return doubleQuoted === "" ? match : `${head}"${BAR}"`;
-        }
-        if (singleQuoted !== undefined) {
-          return singleQuoted === "" ? match : `${head}'${BAR}'`;
-        }
-
-        return bare === undefined || bare === "" ? match : `${head}${BAR}`;
-      },
-    )
+    .replace(YAML_SECRET, maskAssigned)
+    .replace(ASSIGNED_SECRET, maskAssigned)
     .replace(SECRET_PREFIX, BAR)
     .replace(AWS_KEY, BAR)
     .replace(GOOGLE_KEY, BAR)
     .replace(BEARER, (_match, head: string) => `${head}${BAR}`)
     .replace(JWT, BAR);
+
+/** Whether a field name says its value is a secret (`password`, `api_key`). */
+export const isSecretName = (name: string): boolean => SECRET_NAME.test(name);
 
 const escapeRegExp = (text: string): string =>
   text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

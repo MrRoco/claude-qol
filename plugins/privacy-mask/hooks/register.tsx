@@ -7,7 +7,7 @@ import type {
   RenderInput,
 } from "claude-code";
 
-import { createMasker } from "./patterns";
+import { BAR, createMasker, isSecretName } from "./patterns";
 import type { Masker } from "./patterns";
 import type { ModeLabel } from "../types";
 
@@ -52,10 +52,19 @@ const readNames = (options: PluginOptions | undefined): unknown[] => {
   return Array.isArray(value) ? value : [];
 };
 
-/** Masks every string in a plain value, keeping its shape and other values. */
-const maskValue = (value: unknown, maskText: Masker, depth = 0): unknown => {
+/**
+ * Masks every string in a plain value, keeping its shape and other values.
+ * A string under a field named like a secret (`password`, `api_key`) is
+ * replaced whole, as no pattern may match its value.
+ */
+const maskValue = (
+  value: unknown,
+  maskText: Masker,
+  depth = 0,
+  key = "",
+): unknown => {
   if (typeof value === "string") {
-    return maskText(value);
+    return value !== "" && isSecretName(key) ? BAR : maskText(value);
   }
 
   if (value === null || typeof value !== "object") {
@@ -75,7 +84,7 @@ const maskValue = (value: unknown, maskText: Masker, depth = 0): unknown => {
   for (const [key, item] of Object.entries(value)) {
     result[key] = SKIPPED_KEYS.has(key)
       ? item
-      : maskValue(item, maskText, depth + 1);
+      : maskValue(item, maskText, depth + 1, key);
   }
 
   return result;

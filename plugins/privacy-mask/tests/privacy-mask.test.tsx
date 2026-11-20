@@ -367,8 +367,7 @@ test(
       await ui.unmount();
 
       const props = seen.get("SessionMode")?.at(-1) as
-        | { modes: readonly string[] }
-        | undefined;
+        { modes: readonly string[] } | undefined;
 
       return props?.modes;
     };
@@ -411,6 +410,60 @@ test(
       expect(await drawn($, seen, surface, "UserMessage")).toEqual({
         ...PROPS.UserMessage,
         text: MASKED,
+      });
+    }
+  },
+);
+
+test(
+  "masking stays on when the stored switch is dropped, as the host may do at /clear",
+  OPTIONS,
+  async ($, on) => {
+    // Stands in for a host that drops session state: reads answer no value
+    // (the version stays the host's, so a later write still lands).
+    let isDropped = false;
+    on("state.get", async (_, e, next) => {
+      const stored = await next(e);
+
+      return isDropped
+        ? { value: { value: undefined, version: stored.value?.version ?? 0 } }
+        : stored;
+    });
+    const seen = world(on);
+    await startSession($);
+    await $.command.run(MASK);
+    isDropped = true;
+
+    for (const surface of SURFACES) {
+      expect(await drawn($, seen, surface, "UserMessage")).toEqual({
+        ...PROPS.UserMessage,
+        text: MASKED,
+      });
+    }
+
+    // /mask still switches off from the remembered value.
+    expect((await $.command.run(MASK)).text).toBe("Masking is off.");
+  },
+);
+
+test(
+  "secret-named fields of any tool's input are masked whole",
+  OPTIONS,
+  async ($, on) => {
+    const seen = world(on);
+    await startSession($);
+    await $.command.run(MASK);
+    const props = {
+      ...PROPS.ToolUse,
+      tool: "mcp__crm__login",
+      input: { user: "demo", password: "hunter2", api_key: "abc123", note: "" },
+      output: undefined,
+    };
+
+    for (const surface of SURFACES) {
+      expect(await drawn($, seen, surface, "ToolUse", props)).toEqual({
+        ...props,
+        input: { user: "demo", password: BAR, api_key: BAR, note: "" },
       });
     }
   },

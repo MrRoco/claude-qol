@@ -6,6 +6,7 @@ import {
   BAR,
   cleanNames,
   createMasker,
+  isSecretName,
   isValidBsn,
   isValidIban,
   mask,
@@ -233,5 +234,78 @@ describe("mixed text", () => {
 
   test("an empty text stays empty", () => {
     expect(plain("")).toBe("");
+  });
+});
+
+describe("review additions", () => {
+  test("Dutch area code in brackets and the 00 dialling form are masked", () => {
+    expect(plain("Bel (020) 123 4567.")).toBe(`Bel ${BAR}.`);
+    expect(plain("Bel 0031 6 12345678")).toBe(`Bel ${BAR}`);
+    expect(plain("Zie (020) 123 en 0031 6")).toBe("Zie (020) 123 en 0031 6");
+  });
+
+  test("an IBAN in lower case is masked when it passes the check", () => {
+    expect(plain("iban nl91 abna 0417 1643 00 ok")).toBe(`iban ${BAR} ok`);
+    expect(plain("iban nl91abna0417164301")).toBe("iban nl91abna0417164301");
+  });
+
+  test("a postcode in lower case is masked when written against the digits", () => {
+    expect(plain("Adres 1234ab 12")).toBe(`Adres ${BAR}`);
+    // With a space between, capitals only, to keep prose like `in 2024 is 12` out.
+    expect(plain("Adres 1234 ab 12")).toBe("Adres 1234 ab 12");
+  });
+
+  test("a YAML-style secret at the start of a line is masked", () => {
+    expect(plain("api_key: abc123")).toBe(`api_key: ${BAR}`);
+    expect(plain("db:\n  password: 'two words' # local")).toBe(
+      `db:\n  password: '${BAR}' # local`,
+    );
+    expect(plain("- github_token: tok123")).toBe(`- github_token: ${BAR}`);
+    expect(plain("The key: we ship today")).toBe("The key: we ship today");
+    expect(plain("api_key:")).toBe("api_key:");
+  });
+
+  test("bearer in any case, with a real token, is masked", () => {
+    expect(plain("authorization: bearer abcdEFGH1234")).toBe(
+      `authorization: bearer ${BAR}`,
+    );
+    expect(plain("AUTHORIZATION: BEARER abcdEFGH1234")).toBe(
+      `AUTHORIZATION: BEARER ${BAR}`,
+    );
+    expect(plain("the bearer of bad news")).toBe("the bearer of bad news");
+  });
+
+  test("sk_test_ keys are masked", () => {
+    expect(plain("key sk_test_AbCdEf1234567890 end")).toBe(`key ${BAR} end`);
+    expect(plain("desk_test_runner")).toBe("desk_test_runner");
+  });
+
+  test("a JSON secret value with escaped quotes is masked whole", () => {
+    expect(plain('{"password": "a\\"b c", "user": "demo"}')).toBe(
+      `{"password": "${BAR}", "user": "demo"}`,
+    );
+  });
+
+  test("a long run of secret words is masked quickly", () => {
+    const maskText = createMasker(["Piet Jansen"]);
+    const runs = [
+      "key".repeat(70_000),
+      `"${"key".repeat(70_000)}`,
+      `${"key".repeat(70_000)} = x`,
+    ];
+
+    for (const text of runs) {
+      const started = Date.now();
+      maskText(text);
+      expect(Date.now() - started).toBeLessThan(100);
+    }
+  });
+
+  test("field names that mark a secret", () => {
+    expect(isSecretName("password")).toBe(true);
+    expect(isSecretName("API_KEY")).toBe(true);
+    expect(isSecretName("accessToken")).toBe(true);
+    expect(isSecretName("command")).toBe(false);
+    expect(isSecretName("file_path")).toBe(false);
   });
 });
