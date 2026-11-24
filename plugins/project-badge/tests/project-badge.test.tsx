@@ -1,5 +1,5 @@
-import { expect, test } from "claude-code/testing";
-import type { Engine } from "claude-code/testing";
+import { expect, mock, test } from "claude-code/testing";
+import type { Engine, MockClock } from "claude-code/testing";
 import type { On } from "claude-code";
 
 const SURFACES = ["terminal", "desktop"] as const;
@@ -41,6 +41,12 @@ type Tree = {
   unreadable?: string[];
   // Folders whose listing fails beneath the mod.
   unlistable?: string[];
+  // Path under the root → where it really lands: a symbolic link.
+  links?: Record<string, string>;
+  // Paths whose `exists` check waits until the test calls `release`.
+  held?: string[];
+  // No clock beneath the mod: every `$.clock` call fails.
+  noClock?: boolean;
 };
 
 type World = {
@@ -48,6 +54,9 @@ type World = {
   checked: string[];
   entered: { text: string; context: readonly string[] | undefined }[];
   tails: (string | undefined)[];
+  clock: MockClock | null;
+  // Lets the held `exists` checks answer.
+  release: () => void;
 };
 
 // The test runtime has a timer; the hooks' typings (es2023 only) name none.
@@ -66,7 +75,18 @@ const ENOENT = { deny: "ENOENT" } as const;
 
 /** An in-memory project beneath the mod, recording every path it touched. */
 const world = (on: On, tree: Tree): World => {
-  const result: World = { reads: [], checked: [], entered: [], tails: [] };
+  let release = (): void => undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const result: World = {
+    reads: [],
+    checked: [],
+    entered: [],
+    tails: [],
+    clock: tree.noClock === true ? null : mock.clock(on),
+    release: () => release(),
+  };
   const files = new Map(
     Object.entries(tree.files ?? {}).map(([path, value]) => [
       `${ROOT}/${path}`,
@@ -74,8 +94,8 @@ const world = (on: On, tree: Tree): World => {
     ]),
   );
   const dirs = new Set([ROOT, ...(tree.dirs ?? []).map((d) => `${ROOT}/${d}`)]);
-  // Every parent folder of a file exists too.
-  for (const path of files.keys()) {
+  // Every parent folder of a file or folder exists too.
+  for (const path of [...files.keys(), ...dirs]) {
     const parts = path.split("/");
     for (let i = parts.length - 1; i > 1; i -= 1) {
       dirs.add(parts.slice(0, i).join("/"));
@@ -89,19 +109,39 @@ const world = (on: On, tree: Tree): World => {
   );
   const sizeOf = (value: string | { size: number }): number =>
     typeof value === "string" ? value.length : value.size;
+  const links = Object.entries(tree.links ?? {}).map(
+    ([path, target]) => [`${ROOT}/${path}`, target] as const,
+  );
+  const held = new Set((tree.held ?? []).map((p) => `${ROOT}/${p}`));
+  // Where a path really lands: a link on the way swaps its prefix.
+  const realPathOf = (path: string): string => {
+    for (const [link, target] of links) {
+      if (path === link || path.startsWith(`${link}/`)) {
+        return `${target}${path.slice(link.length)}`;
+      }
+    }
+
+    return path;
+  };
 
   on("session.start", (_, e) => ({ cwd: e.cwd }));
   on("session.end", (_, e) => ({ sessionId: e.sessionId }));
   on("session.root", () => ({ value: ROOT }));
   on("ui.invalidate", () => ({ value: undefined }));
-  on("fs.exists", (_, e) => {
+  on("fs.exists", async (_, e) => {
     result.checked.push(e.path);
+
+    if (held.has(e.path)) {
+      await gate;
+    }
 
     return { value: files.has(e.path) || dirs.has(e.path) };
   });
   on("fs.stat", (_, e) => {
     result.checked.push(e.path);
     const file = files.get(e.path);
+    const isLink = links.some(([link]) => link === e.path);
+    const real = e.resolve ? { realPath: realPathOf(e.path) } : {};
 
     if (file !== undefined) {
       return {
@@ -109,13 +149,22 @@ const world = (on: On, tree: Tree): World => {
           kind: "file" as const,
           size: sizeOf(file),
           mtimeMs: 0,
-          isLink: false,
+          isLink,
+          ...real,
         },
       };
     }
 
     return dirs.has(e.path)
-      ? { value: { kind: "dir" as const, size: 0, mtimeMs: 0, isLink: false } }
+      ? {
+          value: {
+            kind: "dir" as const,
+            size: 0,
+            mtimeMs: 0,
+            isLink,
+            ...real,
+          },
+        }
       : ENOENT;
   });
   on("fs.list", (_, e) => {
@@ -216,7 +265,9 @@ const firstContext = async ($: Engine, engine: World) => {
 };
 
 const isSecret = (path: string): boolean =>
-  /config\.inc\.php$|\/\.env[^/]*$|\/auth\.json$/.test(path);
+  /config\.inc\.php$|\/\.env[^/]*$|\/auth\.json$|\/credentials[^/]*$|service-account[^/]*$/i.test(
+    path,
+  );
 
 const MODX_ROOT: Tree = {
   files: {
@@ -230,7 +281,7 @@ const MODX_ROOT: Tree = {
 
 const MODX_CONTEXT = [
   HEADER,
-  `This is a DDEV project (php, PHP 8.2). ${DDEV_RUN}`,
+  `This is a DDEV project (php, PHP 8.2, docroot the project root). ${DDEV_RUN}`,
   `MODX 3.0: ${MODX_RULES}`,
 ].join("\n\n");
 
@@ -336,6 +387,12 @@ test("n8n: workflow files in the root and workflows/ are counted", async ($, on)
       "workflows/huge.json": { size: 2 * MIB },
       ".env.json": WORKFLOW,
       "auth.json": WORKFLOW,
+      "AUTH.JSON": WORKFLOW,
+      ".ENV.prod.json": WORKFLOW,
+      "credentials.json": WORKFLOW,
+      "Credentials-prod.json": WORKFLOW,
+      "workflows/my-Service-Account-key.json": WORKFLOW,
+      "workflows/gcp-service-account.json": WORKFLOW,
       ".env": "TOKEN=secret",
     },
   });
@@ -509,4 +566,189 @@ test("other hooks pass events on unchanged", async ($, on) => {
       resume: {} as never,
     }),
   ).toEqual({ sessionId: "s2" });
+});
+
+test("the first prompt waits for detection at most 1 s, then goes without the block", async ($, on) => {
+  const engine = world(on, { ...MODX_ROOT, held: [".ddev/config.yaml"] });
+  await start($);
+
+  const early = submit($, "early");
+  await engine.clock?.settle();
+  await engine.clock?.advance(999);
+  expect(engine.entered).toEqual([]);
+
+  await engine.clock?.advance(1);
+  await early;
+  expect(engine.entered).toEqual([{ text: "early", context: undefined }]);
+
+  // Detection finishes later: the next prompt takes the block.
+  engine.release();
+  await settle();
+  await submit($, "later");
+  expect(engine.entered[1]).toEqual({ text: "later", context: [MODX_CONTEXT] });
+});
+
+test(
+  "a prompt cut while waiting does not use up the block",
+  {
+    plugins: [
+      {
+        name: "impatient",
+        tier: "prepend",
+        register(on) {
+          let calls = 0;
+          // The first prompt is answered above without waiting for the hooks
+          // beneath, which cuts their dispatch.
+          on("prompt.submit", (_, e, next) => {
+            calls += 1;
+
+            if (calls === 1) {
+              void next(e).catch(() => undefined);
+
+              return { text: e.text, context: e.context };
+            }
+
+            return next(e);
+          });
+        },
+      },
+    ],
+  },
+  async ($, on) => {
+    const engine = world(on, { ...MODX_ROOT, held: [".ddev/config.yaml"] });
+    await start($);
+
+    await submit($, "cut");
+    await engine.clock?.settle();
+    // The detection finishes after the cut prompt's dispatch went on.
+    engine.release();
+    await settle();
+
+    await submit($, "next");
+    expect(
+      engine.entered.filter((entry) => entry.context !== undefined),
+    ).toEqual([{ text: "next", context: [MODX_CONTEXT] }]);
+  },
+);
+
+test('a docroot of "" is the project root: no webroot/ lookup', async ($, on) => {
+  const engine = world(on, {
+    files: { ".ddev/config.yaml": 'type: php\ndocroot: ""\n' },
+    dirs: ["webroot/core/components"],
+  });
+  await start($);
+
+  expect(await tailOf($, engine)).toBe("DDEV · php");
+  expect(await firstContext($, engine)).toEqual([
+    [
+      HEADER,
+      `This is a DDEV project (php, docroot the project root). ${DDEV_RUN}`,
+    ].join("\n\n"),
+  ]);
+  expect(engine.checked.filter((p) => p.includes("webroot"))).toEqual([]);
+});
+
+test("linked files whose real path is outside the root are not read", async ($, on) => {
+  const engine = world(on, {
+    files: {
+      ".ddev/config.yaml": 'type: laravel\nphp_version: "8.3"\n',
+      artisan: "",
+      "composer.lock": JSON.stringify({
+        packages: [{ name: "laravel/framework", version: "v11.0.0" }],
+      }),
+    },
+    dirs: ["app"],
+    links: {
+      ".ddev/config.yaml": "/elsewhere/ddev.yaml",
+      "composer.lock": "/elsewhere/composer.lock",
+    },
+  });
+  await start($);
+
+  expect(await tailOf($, engine)).toBe("DDEV · Laravel");
+  expect(engine.reads).toEqual([]);
+});
+
+test("a core folder linked outside the root is not trusted", async ($, on) => {
+  const engine = world(on, {
+    files: {
+      "core/config/config.inc.php": "<?php",
+      "core/docs/version.inc.php": MODX_VERSION,
+    },
+    links: { core: "/elsewhere/core" },
+  });
+  await start($);
+
+  expect(await tailOf($, engine)).toBeUndefined();
+  expect(engine.reads).toEqual([]);
+});
+
+test("a MODX version file linked outside the root is not read", async ($, on) => {
+  const engine = world(on, {
+    files: {
+      "core/config/config.inc.php": "<?php",
+      "core/docs/version.inc.php": MODX_VERSION,
+    },
+    links: { "core/docs/version.inc.php": "/elsewhere/version.inc.php" },
+  });
+  await start($);
+
+  expect(await tailOf($, engine)).toBe("MODX");
+  expect(engine.reads).toEqual([]);
+});
+
+test("a workflows/ folder linked outside the root is not scanned", async ($, on) => {
+  const engine = world(on, {
+    files: { "workflows/a.json": WORKFLOW, "workflows/b.json": WORKFLOW },
+    links: { workflows: "/elsewhere/workflows" },
+  });
+  await start($);
+
+  expect(await tailOf($, engine)).toBeUndefined();
+  expect(engine.reads).toEqual([]);
+});
+
+test(
+  "the badge goes after another hook's tail",
+  {
+    plugins: [
+      {
+        name: "other-tail",
+        tier: "prepend",
+        register(on) {
+          on("ui.render", { component: "PromptHint" }, (_, e, next) =>
+            next({ ...e, props: { ...e.props, tail: "main" } }),
+          );
+        },
+      },
+    ],
+  },
+  async ($, on) => {
+    const engine = world(on, MODX_ROOT);
+    await start($);
+
+    expect(await tailOf($, engine)).toBe("main · DDEV · MODX 3.0 · PHP 8.2");
+  },
+);
+
+test("when the prompt hook throws, the prompt goes on unchanged", async ($, on) => {
+  const engine = world(on, {
+    ...MODX_ROOT,
+    held: [".ddev/config.yaml"],
+    noClock: true,
+  });
+  await start($);
+
+  // With detection running, the wait calls `$.clock`, which fails here: the
+  // hook throws and its fallback passes the prompt on as it came.
+  await submit($, "hello", { context: ["from another mod"] });
+  expect(engine.entered).toEqual([
+    { text: "hello", context: ["from another mod"] },
+  ]);
+
+  // The block was not used up.
+  engine.release();
+  await settle();
+  await submit($, "again");
+  expect(engine.entered[1]).toEqual({ text: "again", context: [MODX_CONTEXT] });
 });

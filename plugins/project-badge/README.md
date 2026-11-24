@@ -44,7 +44,11 @@ do not show a hint-line tail yet.
 - Only fixed project files are read: `.ddev/config.yaml`, `composer.lock` (under 4 MiB),
   MODX's `core/docs/version.inc.php` and JSON files (under 1 MiB, at most 50) for n8n.
 - `config.inc.php` holds database credentials: it is only checked for existence, never opened.
-  `.env*` files and `auth.json` are never opened either. Nothing outside the project root.
+  `.env*`, `auth.json`, `credentials*.json` and `*service-account*.json` files are never opened
+  either (in any letter case).
+- Nothing outside the project root: before a file is read, or a `core`, docroot or `workflows/`
+  folder is trusted, its real path (every symbolic link followed) is checked, and anything that
+  lands outside the root is skipped.
 - Nothing is written to disk, logged or sent anywhere, except the short rules block that goes
   to Claude with your first prompt (about 100-200 tokens, the same provider as your chat).
 
@@ -52,6 +56,8 @@ do not show a hint-line tail yet.
 
 - Files are read when the session starts or reloads, not watched: a project changed during the
   session shows the old badge until a reload.
+- A first prompt sent while detection is still running waits for it at most one second; past
+  that it goes without the rules block, and the next prompt takes it.
 - `.ddev/config.*.yaml` overrides are not read.
 - Other frameworks (Symfony, WordPress plugins, front-end apps) show DDEV's `type`, or nothing
   outside DDEV.
