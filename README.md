@@ -52,7 +52,7 @@ One mod, from your terminal:
 claude plugin install task-bar@qol
 ```
 
-All nine at once:
+All of them at once:
 
 ```bash
 for m in task-bar fresh-start cache-timer prompt-shaper lesson-saver chat-ledger privacy-mask replay-theater mod-switch ddev-guard repo-fence project-badge commit-clean; do
