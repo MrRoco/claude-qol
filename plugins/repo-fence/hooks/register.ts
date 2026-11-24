@@ -44,8 +44,6 @@ const READ_ONLY_COMMANDS = new Set([
   "echo",
   "printf",
   "which",
-  "source",
-  ".",
   "test",
   "[",
   "realpath",
@@ -551,9 +549,66 @@ const pathOf = (
   return { path: value, isDirectory: attached?.[1] === "C" };
 };
 
+// A sed address: a line number, `$` or `/regex/`.
+const SED_ADDRESS = String.raw`(?:\d+|\$|/(?:[^/\\]|\\.)*/)`;
+// The only sed script that counts as read-only: optional addresses, then `p`.
+const SED_PRINT = new RegExp(`^(?:${SED_ADDRESS}(?:,${SED_ADDRESS})?)?p$`);
+
+/**
+ * Whether a sed call only prints: `-n` (no `-i`), and each script a plain
+ * print such as `1p`, `10,20p` or `/re/p`. Any other script may write (`w`,
+ * `s///w`) or run (`e`) something, so it is no reader.
+ */
+const isSedPrintOnly = (args: readonly string[]): boolean => {
+  const scripts: string[] = [];
+  let isQuiet = false;
+  let hasScriptOption = false;
+  let firstOperand: string | null = null;
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i] ?? "";
+
+    if (arg === "-e" || arg === "--expression") {
+      scripts.push(args[i + 1] ?? "");
+      hasScriptOption = true;
+      i += 1;
+    } else if (arg === "--quiet" || arg === "--silent") {
+      isQuiet = true;
+    } else if (/^-[nEr]+$/.test(arg)) {
+      isQuiet ||= arg.includes("n");
+    } else if (arg.startsWith("-")) {
+      // `-i`, `-f script`, `--in-place` and anything unknown.
+      return false;
+    } else if (firstOperand === null) {
+      firstOperand = arg;
+    }
+  }
+
+  if (!hasScriptOption && firstOperand !== null) {
+    scripts.push(firstOperand);
+  }
+
+  return (
+    isQuiet &&
+    scripts.length > 0 &&
+    scripts.every((script) => SED_PRINT.test(script.trim()))
+  );
+};
+
+/**
+ * Files a sed script writes with `w`/`W` (also `s///w`), as in `1w/x` or
+ * `s/a/b/w /x/y`. Loose on purpose: a false match only asks once too often.
+ */
+const sedWritePaths = (script: string): string[] =>
+  [...script.matchAll(/(?:^|[\s;}/\d$])[wW]\s*((?:\/|~\/)[^\s;}]*)/g)]
+    .map((match) => match[1] ?? "")
+    // `s/a/w/` or `s/a/w/g` puts a `w` in front of `/` or `/g`: a top-level
+    // name like that is the end of an `s` command, not a file.
+    .filter((path) => !/^\/[^/]*$/.test(path));
+
 /**
  * Whether a read-only command writes after all: `find` with an action that
- * changes or runs something, `sed -i`, `sort -o`.
+ * changes or runs something, sed beyond a plain print, `sort -o`.
  */
 const writesAnyway = (first: string, rest: readonly Word[]): boolean => {
   const options = rest.slice(1).map((word) => word.text);
@@ -562,11 +617,7 @@ const writesAnyway = (first: string, rest: readonly Word[]): boolean => {
     case "find":
       return options.some((option) => FIND_ACTIONS.has(option));
     case "sed":
-      // `-i`, `-i.bak`, or `i` in a cluster such as `-ni`.
-      return options.some(
-        (option) =>
-          /^-[A-Za-z]*i/.test(option) || option.startsWith("--in-place"),
-      );
+      return !isSedPrintOnly(options);
     case "sort":
       return options.some(
         (option) =>
@@ -683,6 +734,11 @@ const segmentTargets = (segment: string, context: Context): Target[] => {
 
     if (value !== null) {
       add(targetFor(value.path, value.isDirectory, context));
+    } else if (first === "sed") {
+      // A sed script can name the file it writes inside itself.
+      for (const path of sedWritePaths(word.text)) {
+        add(targetFor(path, false, context));
+      }
     }
   });
 

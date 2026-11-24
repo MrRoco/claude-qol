@@ -276,11 +276,13 @@ test("read-only and inside Bash commands do not ask", async ($, on) => {
     `echo "${OTHER}" > notes.txt`,
     `cat > notes.md <<EOF\nrm ${OTHER}/x\ncd ${OTHER}\nEOF\nls`,
     `npm i # see ${OTHER}`,
-    "source ~/.nvm/nvm.sh",
-    ". ~/.nvm/nvm.sh",
     "[ -f ~/.zshrc ] && echo yes",
     `test -d ${OTHER}`,
     "sed -n 1p /etc/hosts",
+    `sed -n '10,20p' ${OTHER}/x`,
+    `sed -n '/re/p' ${OTHER}/x`,
+    `sed -n -e '$p' ${OTHER}/x`,
+    `sed 's/a/w/' notes.txt`,
     `sort ${OTHER}/x | jq . ${OTHER}/y.json`,
     `realpath ${OTHER} && readlink ${OTHER}/link`,
     `find ${OTHER} -name "*.php"`,
@@ -355,6 +357,40 @@ test("sed -i and sort -o outside ask; other sed and sort do not", async ($, on) 
   }
 
   expect(engine.asked.length).toBe(cases.length);
+});
+
+test("sourcing a script outside asks", async ($, on) => {
+  const engine = world(on);
+  const cases = [`source ${OTHER}/x.sh`, `. ${OTHER}/x.sh`, "source ~/.nvm/nvm.sh"];
+  const paths = [`${OTHER}/x.sh`, `${OTHER}/x.sh`, "/Users/dev/.nvm/nvm.sh"];
+
+  cases.forEach(() => engine.answers.push("Deny"));
+
+  for (const [i, command] of cases.entries()) {
+    expect(await bash($, command)).toEqual({ deny: denied(paths[i] ?? "") });
+  }
+
+  expect(engine.asked.length).toBe(cases.length);
+  expect(engine.ran).toEqual([]);
+});
+
+test("sed beyond a plain print is not read-only", async ($, on) => {
+  const engine = world(on);
+  const cases: [string, string][] = [
+    [`sed s/a/b/ ${OTHER}/x`, `${OTHER}/x`],
+    [`sed -n 1p -f ${OTHER}/s.sed`, `${OTHER}/s.sed`],
+    [`sed -n '1e rm' ${OTHER}/x`, `${OTHER}/x`],
+    [`sed -n 's/a/b/w ${OTHER}/out' notes.txt`, `${OTHER}/out`],
+    [`sed -n '1w${OTHER}/out' notes.txt`, `${OTHER}/out`],
+  ];
+
+  for (const [command, path] of cases) {
+    engine.answers.push("Deny");
+    expect(await bash($, command)).toEqual({ deny: denied(path) });
+  }
+
+  expect(engine.asked.length).toBe(cases.length);
+  expect(engine.ran).toEqual([]);
 });
 
 test("a command after a heredoc is still checked", async ($, on) => {

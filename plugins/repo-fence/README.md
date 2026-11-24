@@ -44,10 +44,12 @@ A command is split into parts on `&&`, `||`, `;`, `|`, `&` and new lines (not in
 - its command is not read-only and it names an absolute or `~/` path outside (also as
   `--option=/path`, `key=/path` such as `dd of=/path`, or attached as `-o/path`). Read-only:
   `ls`, `cat`, `head`, `tail`, `less`, `grep`, `rg`, `find`, `wc`, `stat`, `file`, `diff`,
-  `tree`, `du`, `echo`, `printf`, `which`, `source`, `.`, `test`, `[`, `realpath`, `readlink`,
-  `jq`, `sort`, `sed`, and `git log`, `show`, `diff`, `status`, `blame`. Not read-only after
-  all: `find` with `-delete`, `-exec`, `-execdir`, `-ok` or `-okdir`; `sed` with `-i` or
-  `--in-place`; `sort` with `-o` or `--output`.
+  `tree`, `du`, `echo`, `printf`, `which`, `test`, `[`, `realpath`, `readlink`, `jq`, `sort`,
+  `sed -n` with a plain print script (`1p`, `10,20p`, `/re/p`), and `git log`, `show`, `diff`,
+  `status`, `blame`. Not read-only after all: `find` with `-delete`, `-exec`, `-execdir`, `-ok`
+  or `-okdir`; `sort` with `-o` or `--output`; any other `sed` (such as `-i`, `-f` or a script
+  with `s`, `w` or `e`), where a file named after `w` in the script is checked too. `source`
+  and `.` run a script, so a script outside asks.
 
 ## Settings
 
