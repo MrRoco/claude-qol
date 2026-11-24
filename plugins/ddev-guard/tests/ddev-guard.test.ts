@@ -439,3 +439,53 @@ test("a throw after next was called does not run the command twice", async ($, o
 
   expect(engine.ran).toEqual(["ddev exec php -v"]);
 });
+
+test("cd - is not a subfolder, so nothing after it is rewritten", async ($, on) => {
+  const engine = ddevWorld(on);
+
+  for (const command of ["cd - && php x", "cd -P && php x", "cd web && cd - && php x"]) {
+    await expectUnchanged($, engine, command);
+  }
+});
+
+test("a cd that may have been skipped makes the folder unsure", async ($, on) => {
+  const engine = ddevWorld(on);
+
+  for (const command of [
+    "true || cd web && php x",
+    "echo | cd web && php x",
+  ]) {
+    await expectUnchanged($, engine, command);
+  }
+
+  await expectRewrite(
+    $,
+    engine,
+    "php -v; cd web && php x",
+    "ddev exec php -v; cd web && ddev exec --dir /var/www/html/web php x",
+  );
+});
+
+test("a lone & separates background commands; redirections do not", async ($, on) => {
+  const engine = ddevWorld(on);
+
+  await expectRewrite(
+    $,
+    engine,
+    "php x & php y",
+    "ddev exec php x & ddev exec php y",
+  );
+  await expectRewrite(
+    $,
+    engine,
+    "php x 2>&1 >&2 &>out.log | grep y",
+    "ddev exec php x 2>&1 >&2 &>out.log | grep y",
+  );
+  await expectRewrite(
+    $,
+    engine,
+    "echo a |& php y",
+    "echo a |& ddev exec php y",
+  );
+  await expectUnchanged($, engine, "echo 'a & php b' >/dev/null 2>&1");
+});
