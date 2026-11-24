@@ -7,7 +7,7 @@ Makes sure PHP tooling runs inside the DDEV container, not on your machine.
 - **Rewritten, not refused.** When Claude runs `php`, `composer`, `./artisan`, `vendor/bin/<tool>`
   or `./vendor/bin/<tool>` through Bash, the mod puts `ddev exec` in front, so
   `php artisan migrate` runs as `ddev exec php artisan migrate`. Each part of a chained command
-  (`&&`, `||`, `;`, `|`, a new line) is looked at on its own.
+  (`&&`, `||`, `;`, `|`, `&`, a new line) is looked at on its own.
 - **Claude is told.** A rewritten call carries a short note for Claude naming the original and
   the rewritten command, so it uses `ddev exec` itself from then on. You do not see the note.
 - **Subfolders follow.** `ddev exec` starts in the container's project folder
@@ -15,7 +15,7 @@ Makes sure PHP tooling runs inside the DDEV container, not on your machine.
   rewrite becomes `ddev exec --dir /var/www/html/web …`; `cd app && …` adds to that
   (`/var/www/html/web/app`). When the shell is outside the project folder, the command runs
   unchanged. A `cd` to anything other than a plain folder inside the project (an absolute path,
-  `..`, `~`, a variable or quoted path) stops the rewrite for the rest of the command, and so does
+  `..`, `~`, `cd -`, a variable or quoted path) or a `cd` that may have been skipped stops the rewrite for the rest of the command, and so does
   an `||` after a `cd`, because the shell may then be in either folder.
 - **Your words stay.** The mod only adds `ddev exec` (and `--dir`) in front of a part; it never
   removes or changes what was written.

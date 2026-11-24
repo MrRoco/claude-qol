@@ -116,12 +116,24 @@ const splitSegments = (command: string): Segment[] | null => {
       }
       stack.pop();
     } else if (top === undefined) {
+      const previousChar = command[i - 1];
+
       if (
         (char === "&" && nextChar === "&") ||
-        (char === "|" && nextChar === "|")
+        (char === "|" && (nextChar === "|" || nextChar === "&"))
       ) {
         close(i, `${char}${nextChar}`);
         i += 1;
+        segmentStart = i + 1;
+      } else if (
+        char === "&" &&
+        previousChar !== ">" &&
+        previousChar !== "<" &&
+        nextChar !== ">"
+      ) {
+        // A lone `&` runs the part before it in the background; `2>&1`,
+        // `>&2` and `&>file` are redirections, not separators.
+        close(i, char);
         segmentStart = i + 1;
       } else if (char === ";" || char === "|" || char === "\n") {
         close(i, char);
@@ -173,7 +185,9 @@ const cdTarget = (text: string): string | null => {
 
   const target = words[1] ?? "";
 
-  if (target.startsWith("/")) {
+  // An absolute path, or an option such as `cd -` (the previous folder), is
+  // not a subfolder.
+  if (target.startsWith("/") || target.startsWith("-")) {
     return null;
   }
 
@@ -220,14 +234,26 @@ const rewriteCommand = (command: string, base: string): string | null => {
   // null once a `cd` went somewhere the container path cannot follow.
   let folder: string | null = base;
   const inserts: { at: number; prefix: string }[] = [];
+  // The separator before the current segment; "" for the first one.
+  let before = "";
 
   for (const segment of segments) {
     const word = firstWord(segment.text);
+    const separatorBefore = before;
+    before = segment.separator;
 
     if (word === "cd") {
       const target = cdTarget(segment.text);
+      // A `cd` after `||` may be skipped, one after a pipe runs in a
+      // subshell, and one before anything but `&&` may fail unnoticed: in
+      // each case the folder after it is unsure.
+      const isCertain =
+        segment.separator === "&&" &&
+        separatorBefore !== "||" &&
+        separatorBefore !== "|" &&
+        separatorBefore !== "|&";
       folder =
-        folder !== null && target !== null && segment.separator === "&&"
+        folder !== null && target !== null && isCertain
           ? joinFolders(folder, target)
           : null;
       continue;
