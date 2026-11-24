@@ -49,6 +49,8 @@ scripts/check.sh                       # validate the marketplace and every mod,
   moves, live output and Code Mode's wait for every tool.
 - Keep hook counter state synchronous: never check state across an `await`, so parallel
   calls can't race.
+- A shell command counts as read-only only for a known set of its options. Write such lists
+  as option allowlists, never as a list of known write options.
 
 ## Phase contracts
 
