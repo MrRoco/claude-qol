@@ -122,6 +122,105 @@ Expected:
 - [ ] Save a set `recording`, switch something, apply the set: only the difference switches.
 - [ ] A mod installed for another project does not show.
 
+## 8. ddev-guard
+
+Use an existing local DDEV project (running, `ddev start`), for example a MODX or Laravel client
+project. These prompts only read; do not run migrations.
+
+Prompts, one at a time:
+
+```text
+Run php -v and tell me the PHP version.
+```
+
+```text
+Run cd core && php -r 'echo getcwd();' and show the output.
+```
+
+```text
+Run git log --oneline -1 | cat, then composer --version.
+```
+
+Expected:
+
+- [ ] `php -v` shows the container's PHP (the `php_version` in `.ddev/config.yaml`), not your
+      Mac's. Claude mentions it ran through `ddev exec`.
+- [ ] The `cd core` case prints `/var/www/html/core` (the `--dir` from the `cd`).
+- [ ] After Claude ran a separate `cd core` earlier in the chat, a bare `php -r 'echo getcwd();'`
+      still prints `/var/www/html/core` (current folder carried over).
+- [ ] `git log` runs on the host unchanged; only `composer --version` goes through `ddev exec`.
+- [ ] Piped input: `echo '<?php echo 1;' | php` prints `1` (stdin reaches the container).
+- [ ] In `~/qol-test` (no `.ddev/`), `php -v` runs on the host unchanged.
+
+## 9. commit-clean
+
+In `~/qol-test`:
+
+```text
+Create notes.txt with one line, then commit it with a message you choose, ending with your usual Co-Authored-By trailer.
+```
+
+```text
+Commit an empty change with the subject "Updated the notes".
+```
+
+```text
+Commit an empty change with subject "docs: add notes" and the body line "Co-Authored-By: Claude Dupont <claude.dupont@example.com>".
+```
+
+Expected:
+
+- [ ] `git log -1 --format=%B` shows no `Co-Authored-By: Claude …` and no "Generated with Claude
+      Code" line; Claude says commit-clean removed them.
+- [ ] "Updated the notes" is refused with the format hint; Claude retries with a subject like
+      `docs: update notes` and that commit lands.
+- [ ] The human co-author "Claude Dupont" stays in the third commit.
+
+## 10. repo-fence
+
+In `~/qol-test`, with a second folder next to it:
+
+```bash
+mkdir -p ~/qol-test-outside && echo hello > ~/qol-test-outside/a.txt
+```
+
+Prompts:
+
+```text
+Read ~/qol-test-outside/a.txt and tell me what it says.
+```
+
+```text
+Append the line "world" to ~/qol-test-outside/a.txt.
+```
+
+Expected:
+
+- [ ] Reading does not ask.
+- [ ] The append shows the repo-fence question with **Allow once**, **Allow … for this
+      session** and **Deny**, while Claude waits.
+- [ ] **Deny**: nothing changes; Claude says to open a session in that folder.
+- [ ] Ask again, pick **Allow … for this session**: the line is added; a second change in that
+      folder does not ask.
+- [ ] `/clear`, then another change there: it asks again.
+- [ ] Writing to `/tmp/qol.txt` or the scratchpad does not ask.
+
+## 11. project-badge
+
+Open Claude in the DDEV project from case 8, in `~/qol-test`, and in a folder with an n8n
+workflow export (`.json` with `nodes` and `connections`).
+
+Expected:
+
+- [ ] DDEV + MODX: the hint line under the prompt ends with something like
+      `DDEV · MODX 3.0 · PHP 8.2` (dim).
+- [ ] DDEV + Laravel: `DDEV · Laravel 11 · PHP 8.3`.
+- [ ] n8n folder: `n8n · 1 workflow`.
+- [ ] `~/qol-test`: no badge.
+- [ ] Ask as first prompt "What kind of project is this and how should you run PHP here?"
+      without letting Claude read files: it names the type and `ddev exec`.
+- [ ] The first prompt is not noticeably slower than usual.
+
 ## Report back
 
 For each failed box: the case number, what you saw, and the terminal width.
