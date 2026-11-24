@@ -1,0 +1,15 @@
+{
+  "name": "commit-clean",
+  "version": "0.1.0",
+  "description": "Removes AI attribution from commit messages and checks for conventional commit subjects",
+  "author": { "name": "MrRoco" },
+  "license": "MIT",
+  "userConfig": {
+    "maxSubjectLength": {
+      "type": "number",
+      "title": "Longest subject (characters)",
+      "description": "Commit subjects longer than this are refused",
+      "default": 72
+    }
+  }
+}
