@@ -138,6 +138,7 @@ test("changes inside the root, in temp folders and under .claude pass without as
     "/tmp/scratch.txt",
     "/private/tmp/claude-501/x.md",
     "/var/folders/ab/T/y.json",
+    "/private/var/folders/ab/T/z.json",
     "/Users/dev/.claude/settings.json",
     "~/.claude/projects/memory.md",
   ];
@@ -275,6 +276,14 @@ test("read-only and inside Bash commands do not ask", async ($, on) => {
     `echo "${OTHER}" > notes.txt`,
     `cat > notes.md <<EOF\nrm ${OTHER}/x\ncd ${OTHER}\nEOF\nls`,
     `npm i # see ${OTHER}`,
+    "source ~/.nvm/nvm.sh",
+    ". ~/.nvm/nvm.sh",
+    "[ -f ~/.zshrc ] && echo yes",
+    `test -d ${OTHER}`,
+    "sed -n 1p /etc/hosts",
+    `sort ${OTHER}/x | jq . ${OTHER}/y.json`,
+    `realpath ${OTHER} && readlink ${OTHER}/link`,
+    `find ${OTHER} -name "*.php"`,
   ];
 
   for (const command of commands) {
@@ -283,6 +292,69 @@ test("read-only and inside Bash commands do not ask", async ($, on) => {
 
   expect(engine.asked).toEqual([]);
   expect(engine.ran).toEqual(commands);
+});
+
+test("find with an action that changes or runs something asks", async ($, on) => {
+  const engine = world(on);
+  const commands = [`find ${OTHER} -delete`, `find ${OTHER} -exec rm {} \\;`];
+
+  for (const command of commands) {
+    engine.answers.push("Deny");
+    expect(await bash($, command)).toEqual({ deny: denied(OTHER) });
+  }
+
+  expect(engine.asked.length).toBe(commands.length);
+  expect(engine.ran).toEqual([]);
+});
+
+test("attached short options and key=value paths are checked", async ($, on) => {
+  const engine = world(on);
+  const cases: [string, string, string][] = [
+    [`git -C${OTHER} commit -m x`, OTHER, OTHER],
+    [`git -C${OTHER} status`, OTHER, OTHER],
+    [`make -C${OTHER}`, OTHER, OTHER],
+    [`curl -o${OTHER}/x https://example.com`, `${OTHER}/x`, OTHER],
+    [`dd if=/dev/zero of=${OTHER}/y`, `${OTHER}/y`, OTHER],
+  ];
+
+  for (const [command, path, folder] of cases) {
+    engine.answers.push("Deny");
+    expect(await bash($, command)).toEqual({ deny: denied(path) });
+    expect(engine.asked.at(-1)?.options[1]).toBe(allowFolder(folder));
+  }
+
+  expect(engine.asked.length).toBe(cases.length);
+  expect(engine.ran).toEqual([]);
+});
+
+test("only the home's and the root's .claude folders are always allowed", async ($, on) => {
+  const engine = world(on);
+  const paths = ["/Users/x/other-client/.claude/settings.json", "/etc/.claude/x"];
+
+  for (const path of paths) {
+    engine.answers.push("Deny");
+    expect(await edit($, path)).toEqual({ deny: denied(path) });
+  }
+
+  expect((await write($, `${ROOT}/.claude/settings.json`)).deny).toBeUndefined();
+  expect(engine.asked.length).toBe(paths.length);
+});
+
+test("sed -i and sort -o outside ask; other sed and sort do not", async ($, on) => {
+  const engine = world(on);
+  const cases: [string, string][] = [
+    [`sed -i s/a/b/ ${OTHER}/x`, `${OTHER}/x`],
+    [`sed -i.bak s/a/b/ ${OTHER}/x`, `${OTHER}/x`],
+    [`sed --in-place s/a/b/ ${OTHER}/x`, `${OTHER}/x`],
+    [`sort -o ${OTHER}/x a.txt`, `${OTHER}/x`],
+  ];
+
+  for (const [command, path] of cases) {
+    engine.answers.push("Deny");
+    expect(await bash($, command)).toEqual({ deny: denied(path) });
+  }
+
+  expect(engine.asked.length).toBe(cases.length);
 });
 
 test("a command after a heredoc is still checked", async ($, on) => {
@@ -348,7 +420,10 @@ test("an error before deciding refuses the call and toasts", async ($, on) => {
   expect(await edit($, `${ROOT}/src/a.ts`)).toEqual({
     deny: denied(`${ROOT}/src/a.ts`, "unknown"),
   });
-  expect(await bash($, "ls")).toEqual({ deny: denied("ls", "unknown") });
+  // A Bash command is not named whole in the deny text.
+  expect(await bash($, `rm ${OTHER}/x`)).toEqual({
+    deny: denied("a path", "unknown"),
+  });
   expect(engine.toasts).toEqual([FAILED, FAILED]);
   expect(engine.asked).toEqual([]);
   expect(engine.ran).toEqual([]);
