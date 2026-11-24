@@ -19,6 +19,7 @@ Each mod is a small plugin that adds a helper or changes what you see while you 
 | `ddev-guard`     | Run PHP, Composer and vendor/bin tools inside DDEV                     | 0.1.0   |
 | `repo-fence`     | Ask before Claude changes files outside the repository                 | 0.1.0   |
 | `project-badge`  | Project type by the prompt, matching rules for Claude                  | 0.1.0   |
+| `commit-clean`   | Commits without AI attribution, with conventional subjects             | 0.1.0   |
 
 ## Requirements
 
@@ -54,7 +55,7 @@ claude plugin install task-bar@qol
 All nine at once:
 
 ```bash
-for m in task-bar fresh-start cache-timer prompt-shaper lesson-saver chat-ledger privacy-mask replay-theater mod-switch ddev-guard repo-fence project-badge; do
+for m in task-bar fresh-start cache-timer prompt-shaper lesson-saver chat-ledger privacy-mask replay-theater mod-switch ddev-guard repo-fence project-badge commit-clean; do
   claude plugin install "$m@qol"
 done
 ```
@@ -65,7 +66,7 @@ Inside Claude Code, use `/plugin install task-bar@qol`, or pick mods from the li
 ### 3. Load them
 
 Start a new chat, or run `/reload-plugins` in a chat that was already open. Settings for mods
-that have them (fresh-start, prompt-shaper, lesson-saver, privacy-mask) are in `/config`.
+that have them (fresh-start, prompt-shaper, lesson-saver, privacy-mask, commit-clean, repo-fence) are in `/config`.
 
 ### Check
 

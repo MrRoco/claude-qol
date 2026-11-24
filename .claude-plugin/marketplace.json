@@ -64,6 +64,11 @@
       "name": "project-badge",
       "source": "./plugins/project-badge",
       "description": "Shows the project type (DDEV, Laravel, MODX, n8n) by the prompt and gives Claude the matching rules"
+    },
+    {
+      "name": "commit-clean",
+      "source": "./plugins/commit-clean",
+      "description": "Removes AI attribution from commit messages and checks for conventional commit subjects"
     }
   ]
 }
