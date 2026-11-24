@@ -1,0 +1,8 @@
+{
+  "name": "project-badge",
+  "version": "0.1.0",
+  "description": "Shows the project type (DDEV, Laravel, MODX, n8n) by the prompt and gives Claude the matching rules",
+  "author": { "name": "MrRoco" },
+  "license": "MIT",
+  "types": "./types/index.d.ts"
+}
