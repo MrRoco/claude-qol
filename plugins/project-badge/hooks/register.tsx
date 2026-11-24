@@ -1,5 +1,5 @@
 import { atom, read, update } from "claude-code";
-import type { EngineInterface, Register } from "claude-code";
+import type { EngineInterface, FsStat, Register } from "claude-code";
 
 import type { Badge } from "../types";
 
@@ -17,6 +17,9 @@ const DEFAULT_DOCROOT = "webroot";
 // A value from `.ddev/config.yaml` is used only when it looks like one: a
 // path or a word, never a sentence, a quote left open or a parent folder.
 const SAFE_VALUE = /^[A-Za-z0-9._/-]{1,64}$/;
+// How long the first prompt waits for a detection still running; past it the
+// prompt goes without the block and the next one takes it.
+const FIRST_PROMPT_WAIT_MS = 1000;
 
 const TEXT_HEADER = "project-badge: what this project is.";
 const TEXT_DDEV_RUN =
@@ -41,6 +44,9 @@ type Framework =
   | { kind: "n8n"; count: number };
 
 type Detection = { ddev: Ddev | null; framework: Framework | null };
+
+/** The root as spelled, and where it really lands (null when unresolvable). */
+type Root = { path: string; realPath: string | null };
 
 // Module variables, never in `$.state`: the block for Claude and whether it
 // went out in this session.
@@ -74,6 +80,62 @@ const readSafe = async ($: Engine, path: string): Promise<string | null> => {
   } catch {
     return null;
   }
+};
+
+const withoutTrailingSeparator = (path: string): string =>
+  path.replace(/[\\/]+$/, "");
+
+/** Whether a real path is the root's real path or lies beneath it. */
+const isWithin = (root: Root, realPath: string | undefined): boolean => {
+  if (root.realPath === null || realPath === undefined) {
+    return false;
+  }
+
+  const base = withoutTrailingSeparator(root.realPath);
+
+  return (
+    realPath === base ||
+    realPath.startsWith(`${base}/`) ||
+    realPath.startsWith(`${base}\\`)
+  );
+};
+
+/**
+ * The stat of a path whose real path (every symbolic link followed) lies in
+ * the root; null for one that leads outside, nowhere, or cannot be resolved.
+ */
+const statInside = async (
+  $: Engine,
+  root: Root,
+  path: string,
+): Promise<FsStat | null> => {
+  try {
+    const stat = await $.fs.stat(path, { resolve: true });
+
+    return isWithin(root, stat.realPath) ? stat : null;
+  } catch {
+    return null;
+  }
+};
+
+/** Reads a file only when it really lies in the root and is under `maxBytes`. */
+const readInside = async (
+  $: Engine,
+  root: Root,
+  path: string,
+  maxBytes?: number,
+): Promise<string | null> => {
+  const stat = await statInside($, root, path);
+
+  if (
+    stat === null ||
+    stat.kind !== "file" ||
+    (maxBytes !== undefined && stat.size >= maxBytes)
+  ) {
+    return null;
+  }
+
+  return readSafe($, path);
 };
 
 const parseJson = (text: string | null): unknown => {
@@ -119,11 +181,17 @@ const parseDdev = (text: string): Ddev => {
       value = quoted[2] ?? "";
     }
 
+    // DDEV spells "the project root" as an empty docroot (or `.`).
+    if (field === "docroot" && (value === "" || value === ".")) {
+      value = "";
+    }
+
     // No parent folders and no absolute paths: nothing outside the root.
     const isSafe =
-      SAFE_VALUE.test(value) &&
-      !value.startsWith("/") &&
-      !value.split("/").includes("..");
+      (field === "docroot" && value === "") ||
+      (SAFE_VALUE.test(value) &&
+        !value.startsWith("/") &&
+        !value.split("/").includes(".."));
 
     if (field !== undefined && isSafe && ddev[field] === undefined) {
       ddev[field] = value;
@@ -133,14 +201,14 @@ const parseDdev = (text: string): Ddev => {
   return ddev;
 };
 
-const detectDdev = async ($: Engine, root: string): Promise<Ddev | null> => {
-  const path = `${root}/.ddev/config.yaml`;
+const detectDdev = async ($: Engine, root: Root): Promise<Ddev | null> => {
+  const path = `${root.path}/.ddev/config.yaml`;
 
   if (!(await existsSafe($, path))) {
     return null;
   }
 
-  const text = await readSafe($, path);
+  const text = await readInside($, root, path);
 
   return text === null ? {} : parseDdev(text);
 };
@@ -148,21 +216,11 @@ const detectDdev = async ($: Engine, root: string): Promise<Ddev | null> => {
 /** The major of `laravel/framework` in `composer.lock` (`v11.9.2` → `11`). */
 const laravelVersion = async (
   $: Engine,
-  root: string,
+  root: Root,
 ): Promise<string | undefined> => {
-  const path = `${root}/composer.lock`;
-
-  try {
-    const stat = await $.fs.stat(path);
-
-    if (stat.kind !== "file" || stat.size >= MAX_LOCK_BYTES) {
-      return undefined;
-    }
-  } catch {
-    return undefined;
-  }
-
-  const lock = parseJson(await readSafe($, path));
+  const lock = parseJson(
+    await readInside($, root, `${root.path}/composer.lock`, MAX_LOCK_BYTES),
+  );
   const packages = isObject(lock) ? lock.packages : undefined;
 
   if (!Array.isArray(packages)) {
@@ -181,9 +239,10 @@ const laravelVersion = async (
 /** `version` and `major_version` of MODX's `version.inc.php` (→ `3.0`). */
 const modxVersion = async (
   $: Engine,
+  root: Root,
   path: string,
 ): Promise<string | undefined> => {
-  const text = await readSafe($, path);
+  const text = await readInside($, root, path);
 
   if (text === null) {
     return undefined;
@@ -203,20 +262,25 @@ const modxVersion = async (
 
 /**
  * MODX by existence only: `config.inc.php` holds the database credentials,
- * so it is never opened. Returns the `core` folder found, or null.
+ * so it is never opened. Returns the `core` folder found, or null. A `core`
+ * folder (or docroot) that is a link leading outside the root is not trusted.
  */
 const findModxCore = async (
   $: Engine,
-  root: string,
+  root: Root,
   docroot: string,
 ): Promise<string | null> => {
-  const cores = [`${root}/core`];
+  const cores = [`${root.path}/core`];
 
   if (docroot !== "" && docroot !== ".") {
-    cores.push(`${root}/${docroot.replace(/\/+$/, "")}/core`);
+    cores.push(`${root.path}/${docroot.replace(/\/+$/, "")}/core`);
   }
 
   for (const core of cores) {
+    if ((await statInside($, root, core))?.kind !== "dir") {
+      continue;
+    }
+
     const isFound =
       (await existsSafe($, `${core}/config/config.inc.php`)) ||
       (core !== cores[0] && (await existsSafe($, `${core}/config.inc.php`))) ||
@@ -230,9 +294,17 @@ const findModxCore = async (
   return null;
 };
 
-/** Names never opened, even when they end in `.json`. */
-const isForbidden = (name: string): boolean =>
-  name.startsWith(".env") || name === "auth.json";
+/** Names never opened, even when they end in `.json`, in any letter case. */
+const isForbidden = (name: string): boolean => {
+  const lower = name.toLowerCase();
+
+  return (
+    lower.startsWith(".env") ||
+    lower === "auth.json" ||
+    lower.startsWith("credentials") ||
+    lower.includes("service-account")
+  );
+};
 
 /** JSON files of a folder worth opening, under the size limit. */
 const jsonFiles = async ($: Engine, folder: string): Promise<string[]> => {
@@ -256,16 +328,25 @@ const jsonFiles = async ($: Engine, folder: string): Promise<string[]> => {
 const isWorkflow = (value: unknown): boolean =>
   isObject(value) && Array.isArray(value.nodes) && isObject(value.connections);
 
-/** n8n workflow files in the root and `workflows/`, at most 50 opened. */
-const countWorkflows = async ($: Engine, root: string): Promise<number> => {
+/**
+ * n8n workflow files in the root and `workflows/`, at most 50 opened. A
+ * listing shows a link as `other`, so only plain files are taken; each is
+ * still checked to lie in the root before it is read.
+ */
+const countWorkflows = async ($: Engine, root: Root): Promise<number> => {
+  const workflowDir = `${root.path}/${WORKFLOW_DIR}`;
+  const isWorkflowDirInside =
+    (await statInside($, root, workflowDir))?.kind === "dir";
   const files = [
-    ...(await jsonFiles($, root)),
-    ...(await jsonFiles($, `${root}/${WORKFLOW_DIR}`)),
+    ...(await jsonFiles($, root.path)),
+    ...(isWorkflowDirInside ? await jsonFiles($, workflowDir) : []),
   ].slice(0, MAX_WORKFLOW_FILES);
   let count = 0;
 
   for (const file of files) {
-    if (isWorkflow(parseJson(await readSafe($, file)))) {
+    const text = await readInside($, root, file, MAX_WORKFLOW_BYTES);
+
+    if (isWorkflow(parseJson(text))) {
       count += 1;
     }
   }
@@ -276,12 +357,12 @@ const countWorkflows = async ($: Engine, root: string): Promise<number> => {
 /** The framework layer: first match wins. */
 const detectFramework = async (
   $: Engine,
-  root: string,
+  root: Root,
   ddev: Ddev | null,
 ): Promise<Framework | null> => {
   if (
-    (await existsSafe($, `${root}/artisan`)) &&
-    (await isDirectory($, `${root}/app`))
+    (await existsSafe($, `${root.path}/artisan`)) &&
+    (await isDirectory($, `${root.path}/app`))
   ) {
     return { kind: "laravel", version: await laravelVersion($, root) };
   }
@@ -291,7 +372,7 @@ const detectFramework = async (
   if (core !== null) {
     return {
       kind: "modx",
-      version: await modxVersion($, `${core}/docs/version.inc.php`),
+      version: await modxVersion($, root, `${core}/docs/version.inc.php`),
     };
   }
 
@@ -337,7 +418,9 @@ const contextOf = ({ ddev, framework }: Detection): string | null => {
     const details = [
       ddev.type,
       ddev.phpVersion === undefined ? undefined : `PHP ${ddev.phpVersion}`,
-      ddev.docroot === undefined ? undefined : `docroot ${ddev.docroot}`,
+      ddev.docroot === undefined
+        ? undefined
+        : `docroot ${ddev.docroot === "" ? "the project root" : ddev.docroot}`,
     ].filter((part): part is string => part !== undefined);
     const about = details.length === 0 ? "" : ` (${details.join(", ")})`;
 
@@ -362,7 +445,16 @@ const contextOf = ({ ddev, framework }: Detection): string | null => {
 };
 
 const detect = async ($: Engine): Promise<Detection> => {
-  const root = (await $.session.root()).replace(/[\\/]+$/, "");
+  const path = withoutTrailingSeparator(await $.session.root());
+  let realPath: string | null = null;
+
+  try {
+    realPath = (await $.fs.stat(path, { resolve: true })).realPath ?? null;
+  } catch {
+    // Unresolvable root: existence checks still work, no file is read.
+  }
+
+  const root: Root = { path, realPath };
   const ddev = await detectDdev($, root);
 
   return { ddev, framework: await detectFramework($, root, ddev) };
@@ -398,6 +490,43 @@ const refresh = async ($: Engine): Promise<void> => {
   }
 };
 
+/**
+ * Waits for a running detection, at most FIRST_PROMPT_WAIT_MS or until the
+ * dispatch is cut. Resolves whether the detection finished.
+ */
+const awaitDetection = async (
+  $: Engine,
+  detection: Promise<void>,
+  signal: AbortSignal,
+): Promise<boolean> => {
+  let isDone = false;
+  const done = detection.then(() => {
+    isDone = true;
+  });
+  // Our own signal ends the sleep once detection wins, so no wait is left held.
+  const stop = new AbortController();
+  const onAbort = (): void => stop.abort();
+  signal.addEventListener("abort", onAbort, { once: true });
+  // A sleep ended by the abort is no failure: the caller reads the signal. Any
+  // other failure throws, and the hook's `.catch` passes the prompt on as is.
+  const timeout = $.clock
+    .sleep(FIRST_PROMPT_WAIT_MS, { signal: stop.signal })
+    .catch((error: unknown) => {
+      if (!stop.signal.aborted) {
+        throw error;
+      }
+    });
+
+  try {
+    await Promise.race([done, timeout]);
+  } finally {
+    stop.abort();
+    signal.removeEventListener("abort", onAbort);
+  }
+
+  return isDone;
+};
+
 export const register: Register = (on) => {
   // At the start and at every reload: files may have changed. Detection runs
   // unawaited so the session does not wait on the file system.
@@ -429,8 +558,15 @@ export const register: Register = (on) => {
       return next(e);
     }
 
-    if (pendingDetection !== null) {
-      await pendingDetection;
+    const detection = pendingDetection;
+    const isReady =
+      detection === null || (await awaitDetection($, detection, next.signal));
+
+    // Cut meanwhile (interrupted, overrun, a hook above settled first): this
+    // prompt went on without the hook, so the block did not go out. Not ready
+    // in time: the prompt goes now and the next one takes the block.
+    if (next.signal.aborted || !isReady) {
+      return next(e);
     }
 
     // Checked and set with no await between, so two prompts cannot both send.
