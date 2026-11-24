@@ -489,3 +489,26 @@ test("a lone & separates background commands; redirections do not", async ($, on
   );
   await expectUnchanged($, engine, "echo 'a & php b' >/dev/null 2>&1");
 });
+
+test("after a background list the folder is back to where that list started", async ($, on) => {
+  const engine = ddevWorld(on);
+
+  await expectRewrite(
+    $,
+    engine,
+    "cd web && php x & php y",
+    "cd web && ddev exec --dir /var/www/html/web php x & ddev exec php y",
+  );
+  await expectRewrite(
+    $,
+    engine,
+    "cd web && false || php x & php y",
+    "cd web && false || php x & ddev exec php y",
+  );
+  await expectRewrite(
+    $,
+    engine,
+    "cd web && php x; cd app && php y & php z",
+    "cd web && ddev exec --dir /var/www/html/web php x; cd app && ddev exec --dir /var/www/html/web/app php y & ddev exec --dir /var/www/html/web php z",
+  );
+});

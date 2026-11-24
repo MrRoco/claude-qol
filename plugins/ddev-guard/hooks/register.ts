@@ -236,11 +236,23 @@ const rewriteCommand = (command: string, base: string): string | null => {
   const inserts: { at: number; prefix: string }[] = [];
   // The separator before the current segment; "" for the first one.
   let before = "";
+  // The folder at the start of the current and-or list.
+  let listStartFolder: string | null = base;
 
   for (const segment of segments) {
     const word = firstWord(segment.text);
     const separatorBefore = before;
     before = segment.separator;
+
+    // A list ended by `&` ran in a background subshell: its `cd`s never
+    // moved the shell, so the folder goes back to where that list started.
+    if (separatorBefore === "&") {
+      folder = listStartFolder;
+    }
+
+    if (["", ";", "\n", "&"].includes(separatorBefore)) {
+      listStartFolder = folder;
+    }
 
     if (word === "cd") {
       const target = cdTarget(segment.text);
