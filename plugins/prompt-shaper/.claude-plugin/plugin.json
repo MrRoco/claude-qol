@@ -1,6 +1,6 @@
 {
   "name": "prompt-shaper",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Catches a long prompt, asks a few questions about gaps, and turns it into a clear brief in the prompt box",
   "author": { "name": "MrRoco" },
   "license": "MIT",

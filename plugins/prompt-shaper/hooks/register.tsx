@@ -206,12 +206,25 @@ const resetState = async ($: Engine): Promise<void> => {
   await update($, answersAtom, () => []);
 };
 
+/** `text` with the `>>` marker in front, unless it already starts with one. */
+const withMarker = (text: string): string =>
+  text.startsWith(SEND_AS_IS) ? text : `${SEND_AS_IS} ${text}`;
+
 /**
  * Puts text in the prompt box: over an empty box, or after what was typed
  * meanwhile with a blank line between, so nothing typed is lost. Whether the
  * box took it.
+ *
+ * `isMarked` starts the box with the `>>` marker, so sending a brief does not
+ * get it caught and shaped again. The guard only honours the marker at the
+ * very start, so with text typed meanwhile the box is rewritten as marker,
+ * that text, then the brief.
  */
-const fillBox = async ($: Engine, text: string): Promise<boolean> => {
+const fillBox = async (
+  $: Engine,
+  text: string,
+  isMarked = false,
+): Promise<boolean> => {
   let draft: string | null = null;
 
   try {
@@ -221,14 +234,26 @@ const fillBox = async ($: Engine, text: string): Promise<boolean> => {
     draft = null;
   }
 
+  const marked = (body: string): string => (isMarked ? withMarker(body) : body);
+
   try {
-    const result =
-      draft !== null && draft.trim() === ""
-        ? await $.prompt.fill({ text, mode: "replace" })
-        : await $.prompt.fill({
-            text: draft === null ? text : `\n\n${text}`,
-            mode: "append",
-          });
+    let result;
+
+    if (draft !== null && draft.trim() === "") {
+      result = await $.prompt.fill({ text: marked(text), mode: "replace" });
+    } else if (draft !== null && isMarked) {
+      // No fill mode inserts at the start, so the box is rewritten from the
+      // draft just read; a key pressed between that read and this fill is lost.
+      result = await $.prompt.fill({
+        text: marked(`${draft}\n\n${text}`),
+        mode: "replace",
+      });
+    } else {
+      result = await $.prompt.fill({
+        text: draft === null ? text : `\n\n${text}`,
+        mode: "append",
+      });
+    }
 
     return result.isFilled;
   } catch {
@@ -261,7 +286,7 @@ const endRun = async (
     return;
   }
 
-  if (await fillBox($, text)) {
+  if (await fillBox($, text, outcome === "brief")) {
     if (outcome === "brief") {
       $.ui.toast(TEXT_READY);
     } else if (outcome === "failed") {
@@ -274,7 +299,8 @@ const endRun = async (
   // The box refused it: the row shows the text instead, so it is not lost.
   // Only while no new run started during the fill.
   if (activeRun === null) {
-    heldText = text;
+    // A brief keeps its marker here too, so copying and sending it passes.
+    heldText = outcome === "brief" ? withMarker(text) : text;
     await safely(async () => {
       await update($, stepAtom, (step) => (step === "idle" ? "held" : step));
     });

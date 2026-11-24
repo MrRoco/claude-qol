@@ -30,6 +30,8 @@ claude plugin install prompt-shaper@qol
 
 - **Send as is:** start a prompt with `>>` to skip shaping. The marker (and one space after it)
   is removed, the rest is sent unchanged, however long.
+- **Sending the brief:** the brief lands in the prompt box with `>>` in front, so sending it
+  does not shape it again. Remove the marker to have it shaped once more.
 - **On demand:** `/shape <your prompt>` shapes any text, also a short one. Without text it shows
   how to use it; while a prompt is being shaped it says it is busy.
 - Only prompts you type (or paste) in the prompt box while Claude is idle are caught. Slash

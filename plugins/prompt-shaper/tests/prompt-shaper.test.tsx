@@ -10,6 +10,8 @@ const ROOT = "/work/project";
 const LONG = `Build the CSV importer for the orders table. ${"Keep it simple. ".repeat(40)}`;
 const BRIEF =
   "## Task\nBuild the CSV importer.\n\n## Done when\nOrders import.";
+// The brief as it lands in the box: with the `>>` marker, so sending it passes.
+const MARKED = `>> ${BRIEF}`;
 const DROP = "prompt-shaper is reading your prompt.";
 const READY = "Brief ready in the prompt box. Edit and send it.";
 const FAILED = "Could not shape the prompt; your text is back in the box.";
@@ -340,7 +342,7 @@ test("three questions: answer, skip, answer; the brief gets two Q/A pairs", asyn
     expect(brief?.prompt).toBe(
       `${LONG}\n\nAnswers:\nQ: Which database? A: Postgres\nQ: Who runs it? A: A nightly job`,
     );
-    expect(engine.filled).toEqual([{ text: BRIEF, mode: "replace" }]);
+    expect(engine.filled).toEqual([{ text: MARKED, mode: "replace" }]);
     expect(engine.toasts).toEqual([READY]);
     expect(await isRowEmpty($, surface)).toBe(true);
   }
@@ -366,7 +368,7 @@ test("Skip all goes straight to writing with no answers", async ($, on) => {
 
   expect(engine.requests[1]?.prompt).toBe(LONG);
   await engine.release();
-  expect(engine.filled).toEqual([{ text: BRIEF, mode: "replace" }]);
+  expect(engine.filled).toEqual([{ text: MARKED, mode: "replace" }]);
 });
 
 test("no questions goes straight to writing", async ($, on) => {
@@ -390,7 +392,7 @@ test("no questions goes straight to writing", async ($, on) => {
   await engine.release();
   expect(engine.requests.length).toBe(2);
   expect(engine.requests[1]?.prompt).toBe(LONG);
-  expect(engine.filled).toEqual([{ text: BRIEF, mode: "replace" }]);
+  expect(engine.filled).toEqual([{ text: MARKED, mode: "replace" }]);
 });
 
 test("bad JSON: no questions, or the first three strings found", async ($, on) => {
@@ -414,26 +416,28 @@ test("bad JSON: no questions, or the first three strings found", async ($, on) =
     if (row === undefined) {
       // Straight to writing, which answered: the brief is in the box.
       expect(engine.requests.length).toBe(2);
-      expect(engine.filled).toEqual([{ text: BRIEF, mode: "replace" }]);
+      expect(engine.filled).toEqual([{ text: MARKED, mode: "replace" }]);
     } else {
       expect(await rowText($, "terminal")).toBe(row);
       await onBand($, "terminal", async (ui) => {
         await ui.press({ key: "skip-all" });
       });
       await settle();
-      expect(engine.filled).toEqual([{ text: BRIEF, mode: "replace" }]);
+      expect(engine.filled).toEqual([{ text: MARKED, mode: "replace" }]);
     }
   }
 });
 
-test("the brief is appended after text typed meanwhile", async ($, on) => {
+test("the brief comes after text typed meanwhile, the marker before both", async ($, on) => {
   const engine = world(on);
   engine.box = "typed while waiting";
   engine.replies.push('{"questions": []}', BRIEF);
 
   await catchLong($);
 
-  expect(engine.filled).toEqual([{ text: `\n\n${BRIEF}`, mode: "append" }]);
+  expect(engine.filled).toEqual([
+    { text: `>> typed while waiting\n\n${BRIEF}`, mode: "replace" },
+  ]);
   expect(engine.toasts).toEqual([READY]);
 });
 
@@ -525,7 +529,7 @@ test("a prompt box that refuses the text shows it in the row", async ($, on) => 
         "did not take this text",
       );
       expect((await ui.find({ type: "Text", text: /## Task/ }))?.text).toBe(
-        BRIEF,
+        MARKED,
       );
       expect(await ui.find({ type: "Button", key: "close" })).toBeDefined();
     });
@@ -584,7 +588,7 @@ test("/shape shapes its arguments; empty or busy say so", async ($, on) => {
   engine.isHolding = false;
   await engine.release();
   await engine.release();
-  expect(engine.filled).toEqual([{ text: BRIEF, mode: "replace" }]);
+  expect(engine.filled).toEqual([{ text: MARKED, mode: "replace" }]);
 });
 
 test(
@@ -770,4 +774,46 @@ test("/shape that fails to start says so", async ($, on) => {
     text: "prompt-shaper could not start.",
     isTextDisplayOnly: true,
   });
+});
+
+test("a shaped brief is sent, not caught again, also when edited", async ($, on) => {
+  const engine = world(on);
+  // A brief as long as a real one: over the 400-character threshold.
+  const longBrief = `## Task\nBuild the CSV importer.\n\n## Context\n${"Orders come from the shop. ".repeat(20)}`.trim();
+  engine.replies.push('{"questions": []}', longBrief);
+  await catchLong($);
+  expect(engine.filled).toEqual([{ text: `>> ${longBrief}`, mode: "replace" }]);
+
+  // Sent from the box: the marker is removed, the brief goes out unchanged.
+  expect((await submit($, `>> ${longBrief}`)).text).toBe(longBrief);
+
+  const edited = `${longBrief}\n\n## Done when\nOrders import without errors.`;
+  expect((await submit($, `>> ${edited}`)).text).toBe(edited);
+  expect(engine.requests.length).toBe(2);
+});
+
+test("a draft that already starts with >> gets no second marker", async ($, on) => {
+  const engine = world(on);
+  engine.box = ">> typed while waiting";
+  engine.replies.push('{"questions": []}', BRIEF);
+  await catchLong($);
+
+  expect(engine.filled).toEqual([
+    { text: `>> typed while waiting\n\n${BRIEF}`, mode: "replace" },
+  ]);
+});
+
+test("Cancel with text typed meanwhile appends the original, unmarked", async ($, on) => {
+  const engine = world(on);
+  engine.box = "typed while waiting";
+  engine.isHolding = true;
+  engine.replies.push('{"questions": []}', BRIEF);
+  await catchLong($);
+
+  await onBand($, "terminal", async (ui) => {
+    await ui.press({ key: "cancel" });
+  });
+  await settle();
+
+  expect(engine.filled).toEqual([{ text: `\n\n${LONG}`, mode: "append" }]);
 });
