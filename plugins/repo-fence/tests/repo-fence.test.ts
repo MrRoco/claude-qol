@@ -284,6 +284,12 @@ test("read-only and inside Bash commands do not ask", async ($, on) => {
     `sed -n -e '$p' ${OTHER}/x`,
     `sed 's/a/w/' notes.txt`,
     `sort ${OTHER}/x | jq . ${OTHER}/y.json`,
+    `sort -n -k2 ${OTHER}/a`,
+    `sort -t, -k 2 ${OTHER}/a`,
+    `sort -rk2 --key=3 --field-separator=: -S 1M ${OTHER}/a`,
+    `git log ${OTHER}`,
+    `git show HEAD:${OTHER}/x`,
+    `tree -L 2 ${OTHER}`,
     `realpath ${OTHER} && readlink ${OTHER}/link`,
     `find ${OTHER} -name "*.php"`,
   ];
@@ -382,6 +388,31 @@ test("sed beyond a plain print is not read-only", async ($, on) => {
     [`sed -n '1e rm' ${OTHER}/x`, `${OTHER}/x`],
     [`sed -n 's/a/b/w ${OTHER}/out' notes.txt`, `${OTHER}/out`],
     [`sed -n '1w${OTHER}/out' notes.txt`, `${OTHER}/out`],
+  ];
+
+  for (const [command, path] of cases) {
+    engine.answers.push("Deny");
+    expect(await bash($, command)).toEqual({ deny: denied(path) });
+  }
+
+  expect(engine.asked.length).toBe(cases.length);
+  expect(engine.ran).toEqual([]);
+});
+
+test("write options of sort, find, git and tree ask", async ($, on) => {
+  const engine = world(on);
+  const cases: [string, string][] = [
+    [`sort --out=${OTHER}/x a`, `${OTHER}/x`],
+    [`sort --ou ${OTHER}/x a`, `${OTHER}/x`],
+    [`sort --compress-program=${OTHER}/x a`, `${OTHER}/x`],
+    [`sort -T ${OTHER} a`, OTHER],
+    [`sort -no${OTHER}/x a`, `${OTHER}/x`],
+    [`find . -fprint ${OTHER}/out`, `${OTHER}/out`],
+    [`git diff --output=${OTHER}/x`, `${OTHER}/x`],
+    [`git -c core.pager=${OTHER}/x log`, `${OTHER}/x`],
+    [`git --config-env=core.pager=X log ${OTHER}/f`, `${OTHER}/f`],
+    [`tree -o ${OTHER}/x`, `${OTHER}/x`],
+    [`tree --outp=${OTHER}/x`, `${OTHER}/x`],
   ];
 
   for (const [command, path] of cases) {
