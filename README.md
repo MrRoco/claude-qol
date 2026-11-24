@@ -17,6 +17,7 @@ Each mod is a small plugin that adds a helper or changes what you see while you 
 | `replay-theater` | Step through the last turn's file edits (Anthropic sample, Apache 2.0) | 0.1.0   |
 | `mod-switch`     | Turn mods on and off from one panel                                    | 0.1.0   |
 | `ddev-guard`     | Run PHP, Composer and vendor/bin tools inside DDEV                     | 0.1.0   |
+| `repo-fence`     | Ask before Claude changes files outside the repository                 | 0.1.0   |
 
 ## Requirements
 
@@ -52,7 +53,7 @@ claude plugin install task-bar@qol
 All nine at once:
 
 ```bash
-for m in task-bar fresh-start cache-timer prompt-shaper lesson-saver chat-ledger privacy-mask replay-theater mod-switch ddev-guard; do
+for m in task-bar fresh-start cache-timer prompt-shaper lesson-saver chat-ledger privacy-mask replay-theater mod-switch ddev-guard repo-fence; do
   claude plugin install "$m@qol"
 done
 ```

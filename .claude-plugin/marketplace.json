@@ -54,6 +54,11 @@
       "name": "ddev-guard",
       "source": "./plugins/ddev-guard",
       "description": "Runs PHP, Composer and vendor/bin commands through ddev exec in DDEV projects"
+    },
+    {
+      "name": "repo-fence",
+      "source": "./plugins/repo-fence",
+      "description": "Asks before Claude changes files or works outside the session's repository"
     }
   ]
 }

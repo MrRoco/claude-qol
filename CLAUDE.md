@@ -63,3 +63,4 @@ scripts/check.sh                       # validate the marketplace and every mod,
 - `.plan/phase7-contract.md` — privacy-mask
 - `.plan/phase9-contract.md` — mod-switch
 - `.plan/phase10-contract.md` — ddev-guard
+- `.plan/phase12-contract.md` — repo-fence
