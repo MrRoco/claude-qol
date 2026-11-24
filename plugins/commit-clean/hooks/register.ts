@@ -10,6 +10,8 @@ const NOTE_REMOVED =
 
 const SUBJECT_PATTERN =
   /^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9._/-]+\))?!?: \S/;
+const GIT_DEFAULT_SUBJECT =
+  /^(Merge (branch|pull request|remote-tracking branch) \S|Revert ".+"$)/;
 // A summary that reports what was done instead of saying what the commit does.
 const PAST_TENSE_START =
   /^(added|adds|fixed|fixes|updated|updates|removed|removes|changed|changes)\b/i;
@@ -31,12 +33,20 @@ type Heredoc = {
   bodyEnd: number;
 };
 
-type Segment = { start: number; end: number; heredocs: Heredoc[] };
+type Segment = {
+  start: number;
+  end: number;
+  heredocs: Heredoc[];
+  // The operator that ended the segment (`|`, `&&`, `;`, a newline, …), or "".
+  separator: string;
+};
 
 type PendingHeredoc = {
   delimiter: string;
   isQuoted: boolean;
   isTabStripped: boolean;
+  // The heredocs of the segment whose `<<` opened it.
+  target: Heredoc[];
 };
 
 type Word = { start: number; end: number };
@@ -156,8 +166,8 @@ const readDelimiter = (
 
 /**
  * Splits shell text into segments on `&&`, `||`, `;`, `|`, `&` and newlines,
- * outside quotes, substitutions and heredoc bodies. A heredoc's body belongs to
- * the segment whose line opened it. In `isSubst` mode it reads the inside of a
+ * outside quotes, substitutions and heredoc bodies. A heredoc belongs to the
+ * segment whose `<<` opened it, also when its body follows a later `|`. In `isSubst` mode it reads the inside of a
  * `$( … )` and returns the position after its closing parenthesis.
  */
 const scan = (
@@ -177,8 +187,8 @@ const scan = (
   let parens = 0;
   let pos = start;
 
-  const closeSegment = (end: number, next: number): void => {
-    segments.push({ start: segmentStart, end, heredocs });
+  const closeSegment = (end: number, next: number, separator: string): void => {
+    segments.push({ start: segmentStart, end, heredocs, separator });
     heredocs = [];
     segmentStart = next;
   };
@@ -204,7 +214,7 @@ const scan = (
           : line;
 
         if (compared === heredoc.delimiter) {
-          heredocs.push({
+          heredoc.target.push({
             delimiter: heredoc.delimiter,
             isQuoted: heredoc.isQuoted,
             bodyStart,
@@ -266,6 +276,7 @@ const scan = (
         delimiter: read.delimiter,
         isQuoted: read.isQuoted,
         isTabStripped,
+        target: heredocs,
       });
       pos = read.end;
     } else if (char === "(") {
@@ -277,7 +288,7 @@ const scan = (
           throw new ParseError("unbalanced parenthesis");
         }
 
-        closeSegment(pos, pos + 1);
+        closeSegment(pos, pos + 1, ")");
 
         return { end: pos + 1, segments };
       }
@@ -286,27 +297,27 @@ const scan = (
       pos += 1;
     } else if (char === "\n") {
       const after = pending.length > 0 ? readBodies(pos + 1) : pos + 1;
-      closeSegment(pos, after);
+      closeSegment(pos, after, "\n");
       pos = after;
     } else if (char === ";") {
-      closeSegment(pos, pos + 1);
+      closeSegment(pos, pos + 1, ";");
       pos += 1;
     } else if (char === "&") {
       const previous = src[pos - 1];
 
       if (nextChar === "&") {
-        closeSegment(pos, pos + 2);
+        closeSegment(pos, pos + 2, "&&");
         pos += 2;
       } else if (previous === ">" || previous === "<" || nextChar === ">") {
         // A redirection such as `2>&1` or `&>file`, not a separator.
         pos += 1;
       } else {
-        closeSegment(pos, pos + 1);
+        closeSegment(pos, pos + 1, "&");
         pos += 1;
       }
     } else if (char === "|") {
       const width = nextChar === "|" || nextChar === "&" ? 2 : 1;
-      closeSegment(pos, pos + width);
+      closeSegment(pos, pos + width, src.slice(pos, pos + width));
       pos += width;
     } else {
       pos += 1;
@@ -317,7 +328,7 @@ const scan = (
     throw new ParseError("unterminated command");
   }
 
-  closeSegment(src.length, src.length);
+  closeSegment(src.length, src.length, "");
 
   return { end: src.length, segments };
 };
@@ -582,11 +593,60 @@ const LONG_EXCLUDED = new Set([
   "--no-edit",
 ]);
 
+/** A `Co-Authored-By:` line naming a Claude model or an `@anthropic.com` address. */
+const isAiCoAuthor = (line: string): boolean =>
+  /^\s*co-authored-by:/i.test(line) &&
+  (/@anthropic\.com/i.test(line) ||
+    /\bclaude[\s-]+(opus|sonnet|haiku|fable|code)\b/i.test(line));
+
+/** A `--trailer` value (`token: value` or `token=value`) that is an AI co-author. */
+const isAiTrailer = (value: string): boolean =>
+  isAiCoAuthor(value.replace(/^(\s*co-authored-by)\s*[:=]/i, "$1:"));
+
+/** The edit that removes an option and its value, with the blanks before it. */
+const removal = (src: string, start: number, end: number): Edit => {
+  let from = start;
+
+  while (from > 0 && /[ \t]/.test(src[from - 1] ?? "")) {
+    from -= 1;
+  }
+
+  return { start: from, end, text: "" };
+};
+
+/** The heredoc of a `cat <<'EOF'` segment piped into the next one, or null. */
+const pipedHeredoc = (
+  src: string,
+  segment: Segment | undefined,
+): Heredoc | null => {
+  if (
+    segment === undefined ||
+    segment.separator !== "|" ||
+    segment.heredocs.length !== 1 ||
+    !/^\s*cat\s+<<-?\s*\S+\s*$/.test(src.slice(segment.start, segment.end))
+  ) {
+    return null;
+  }
+
+  return segment.heredocs[0] ?? null;
+};
+
+type Commit = {
+  parts: MessagePart[];
+  // Removals of AI `--trailer` options.
+  edits: Edit[];
+};
+
 /**
  * The message parts of the segment when it is a `git … commit` whose message
- * the mod checks; null when it is not, or when it passes unchanged.
+ * the mod checks; null when it is not, or when it passes unchanged. `piped` is
+ * the heredoc a `cat <<'EOF' |` before the segment feeds into its stdin.
  */
-const commitParts = (src: string, segment: Segment): MessagePart[] | null => {
+const commitParts = (
+  src: string,
+  segment: Segment,
+  piped: Heredoc | null,
+): Commit | null => {
   const words: { word: Word; value: string | null }[] = [];
   let hasHeredocRedirect = false;
   const all = wordsOf(src, segment);
@@ -625,6 +685,7 @@ const commitParts = (src: string, segment: Segment): MessagePart[] | null => {
   }
 
   const parts: MessagePart[] = [];
+  const edits: Edit[] = [];
   let file: string | null | undefined;
 
   for (index += 1; index < words.length; index += 1) {
@@ -691,6 +752,19 @@ const commitParts = (src: string, segment: Segment): MessagePart[] | null => {
           return null;
         } else {
           parts.push(part);
+        }
+      } else if (name === "--trailer") {
+        // An AI co-author goes with its whole option; other trailers stay.
+        const next = equals === -1 ? words[index + 1] : undefined;
+        const trailer =
+          equals === -1 ? (next?.value ?? null) : value.slice(equals + 1);
+
+        if (trailer !== null && isAiTrailer(trailer)) {
+          edits.push(removal(src, word.start, next?.word.end ?? word.end));
+        }
+
+        if (equals === -1) {
+          index += 1;
         }
       } else if (LONG_WITH_VALUE.has(name) && equals === -1) {
         index += 1;
@@ -759,38 +833,49 @@ const commitParts = (src: string, segment: Segment): MessagePart[] | null => {
   }
 
   if (file !== undefined) {
-    // Only `-F -` fed by this segment's own heredoc is read; a file is not.
-    const heredoc = segment.heredocs[0];
+    // Only `-F -` fed by a heredoc is read: this segment's own, or the one a
+    // `cat <<'EOF' |` pipes in. A file is not.
+    const ownHeredoc =
+      hasHeredocRedirect && segment.heredocs.length === 1
+        ? (segment.heredocs[0] ?? null)
+        : null;
+    const isPipedOnly =
+      !hasHeredocRedirect && segment.heredocs.length === 0 && piped !== null;
+    const heredoc = ownHeredoc ?? (isPipedOnly ? piped : null);
 
-    if (
-      file !== "-" ||
-      parts.length > 0 ||
-      !hasHeredocRedirect ||
-      heredoc === undefined ||
-      segment.heredocs.length !== 1
-    ) {
+    if (file !== "-" || parts.length > 0 || heredoc === null) {
       return null;
     }
 
     const part = heredocPart(src, heredoc);
 
-    return part === null ? null : [part];
+    return part === null ? null : { parts: [part], edits };
   }
 
   // No message given: git opens the editor, nothing to check.
-  return parts.length > 0 ? parts : null;
+  return parts.length > 0 ? { parts, edits } : null;
+};
+
+/**
+ * A "Generated with … Claude Code" line that looks like a trailer: short, and
+ * with an emoji or a link, or starting with "Generated with". A body sentence
+ * that mentions it stays.
+ */
+const isGeneratedLine = (line: string): boolean => {
+  const trimmed = line.trim();
+
+  return (
+    /generated with\b.*\bclaude code/i.test(trimmed) &&
+    [...trimmed].length <= 100 &&
+    (/\p{Extended_Pictographic}/u.test(trimmed) ||
+      /\]\(|https?:\/\//i.test(trimmed) ||
+      /^generated with\b/i.test(trimmed))
+  );
 };
 
 /** Whether a message line is an AI attribution line the mod removes. */
-const isAttribution = (line: string): boolean => {
-  const isClaudeCoAuthor =
-    /^\s*co-authored-by:/i.test(line) &&
-    (/\bclaude\b/i.test(line) || /@anthropic\.com/i.test(line));
-  const isGeneratedLine =
-    /generated with/i.test(line) && /claude code/i.test(line);
-
-  return isClaudeCoAuthor || isGeneratedLine;
-};
+const isAttribution = (line: string): boolean =>
+  isAiCoAuthor(line) || isGeneratedLine(line);
 
 /** The part with attribution lines and then trailing blank lines removed; null when unchanged. */
 const cleaned = (
@@ -819,6 +904,11 @@ const cleaned = (
 };
 
 const isGoodSubject = (subject: string, maxLength: number): boolean => {
+  // Git's own subjects for merges and reverts pass as git writes them.
+  if (GIT_DEFAULT_SUBJECT.test(subject)) {
+    return true;
+  }
+
   const summary = subject.slice(subject.indexOf(": ") + 2);
 
   return (
@@ -856,13 +946,7 @@ const editFor = (
     return { start: part.optionStart, end: part.argEnd, text: part.optionKeep };
   }
 
-  let start = part.optionStart;
-
-  while (start > 0 && /[ \t]/.test(src[start - 1] ?? "")) {
-    start -= 1;
-  }
-
-  return { start, end: part.argEnd, text: "" };
+  return removal(src, part.optionStart, part.argEnd);
 };
 
 /** Decides what happens to a Bash command: pass, refuse, or run rewritten. */
@@ -874,16 +958,23 @@ const judge = (command: string, maxLength: number): Verdict => {
 
   const edits: Edit[] = [];
 
-  for (const segment of scan(command, 0, false, 0).segments) {
-    const parts = commitParts(command, segment);
+  const segments = scan(command, 0, false, 0).segments;
 
-    if (parts === null) {
+  for (const [i, segment] of segments.entries()) {
+    const commit = commitParts(
+      command,
+      segment,
+      pipedHeredoc(command, segments[i - 1]),
+    );
+
+    if (commit === null) {
       continue;
     }
 
+    edits.push(...commit.edits);
     const paragraphs: string[] = [];
 
-    for (const part of parts) {
+    for (const part of commit.parts) {
       const kept = cleaned(part);
 
       if (kept !== null) {
