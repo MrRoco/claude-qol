@@ -13,6 +13,33 @@ export interface Task {
   status: TaskStatus
 }
 
+/**
+ * What the engine tells about a subagent, as last read from `$.agent.list()`:
+ * model ids, numbers and a folder name only, never a description, prompt,
+ * input or result.
+ */
+export interface AgentFacts {
+  /** model id of the latest usage entry, else the agent's `model` */
+  model?: string
+  /** every model id in its usage, in order; more than one = a fallback */
+  models: string[]
+  /** effort level or number as written; absent = the session's */
+  effort?: string
+  contextWindowSize?: number
+  tokenCount: number
+  /** input + cache creation + cache read, summed over its usage */
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  /** estimate, USD, as `/cost` counts it */
+  costUsd?: number
+  hasUnknownPrice?: boolean
+  /** last path part of its folder when that is not the session's own */
+  worktree?: string
+  /** type of the parent card; absent = started by the main chat */
+  parentType?: string
+}
+
 export interface AgentCard {
   /** agentId */
   id: string
@@ -29,6 +56,12 @@ export interface AgentCard {
   lastTool?: string
   /** the agent's own TodoWrite list, [] when none */
   tasks: Task[]
+  /** calls per tool name, names only */
+  toolCounts: Record<string, number>
+  /** last snapshot; kept once the agent is no longer listed */
+  facts?: AgentFacts
+  /** why a failed card ended */
+  endReason?: 'error' | 'aborted'
 }
 
 export interface TaskBarState {
@@ -38,6 +71,8 @@ export interface TaskBarState {
   goal: string | null
   agents: AgentCard[]
   paneClosedByUser: boolean
+  /** id of the one expanded card, null when none */
+  openCard: string | null
 }
 
 declare module 'claude-code' {
@@ -48,6 +83,7 @@ declare module 'claude-code' {
       goal: string | null
       agents: AgentCard[]
       paneClosedByUser: boolean
+      openCard: string | null
     }
   }
 }

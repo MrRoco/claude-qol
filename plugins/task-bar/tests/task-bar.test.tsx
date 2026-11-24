@@ -97,6 +97,8 @@ const world = (
   {
     hasBuiltinTodos = true,
     registeredAs = (name: string) => `mcp__task-bar__${name}`,
+    // Awaited after the list is read and before it answers.
+    beforeListAnswers = async (): Promise<void> => undefined,
   } = {},
 ): World => {
   const clock = mock.clock(on, { now: START });
@@ -127,7 +129,12 @@ const world = (
 
     return { value: { isPlaced: true } };
   });
-  on("agent.list", () => ({ value: agents }));
+  on("agent.list", async () => {
+    const listed = agents.map((agent) => ({ ...agent }));
+    await beforeListAnswers();
+
+    return { value: listed };
+  });
   on("session.start", (_, e) => ({ cwd: e.cwd }));
   on("session.end", (_, e) => ({ sessionId: e.sessionId }));
   on("prompt.submit", (_, e) => ({ text: e.text }));
@@ -504,7 +511,7 @@ test("a subagent start, its tool calls and its end give one card", async ($, on)
 
   for (const surface of SURFACES) {
     const ui = await $.ui.mount({ ...PANE, surface });
-    expect(await cardText(ui, /^Explore$/)).toBe("Explore");
+    expect((await ui.find({ type: "Button" }))?.props.label).toBe("▸ Explore");
     expect(await cardText(ui, /hooks folder/)).toBe("  Map the hooks folder");
     expect(await cardText(ui, /running/)).toBe(" running 0s");
     expect((await ui.find({ type: "Text", text: /●/ }))?.props.color).toBe(
@@ -532,7 +539,7 @@ test("a subagent start, its tool calls and its end give one card", async ($, on)
 
   for (const surface of SURFACES) {
     const ui = await $.ui.mount({ ...PANE, surface });
-    expect(await ui.findAll({ type: "Text", text: /^Explore$/ })).toHaveLength(1);
+    expect(await ui.findAll({ type: "Button" })).toHaveLength(1);
     expect((await ui.find({ type: "Text", text: /●/ }))?.props.color).toBe(
       "success",
     );
@@ -1440,15 +1447,15 @@ test("each card is a padded round box in its status colour, border to border", a
         ["round", "success", 1, tint("diffAddedDimmed"), 0, 0],
       ]);
 
-      // Line 1: the dot, the type in bold, and the status and time on the
-      // right, both in the status colour.
+      // Line 1: the dot, the type as the card's button, and the status and
+      // time on the right, both in the status colour.
       const dots = await ui.findAll({ type: "Text", text: /●/ });
       expect(dots.map((one) => one.props.color)).toEqual(["claude", "error", "success"]);
-      const types = await ui.findAll({ type: "Text", text: /^(Explore|Plan)$/ });
-      expect(types.map((one) => [one.text, one.props.weight])).toEqual([
-        ["Explore", "bold"],
-        ["Plan", "bold"],
-        ["Explore", "bold"],
+      const types = await ui.findAll({ type: "Button" });
+      expect(types.map((one) => one.props.label)).toEqual([
+        "▸ Explore",
+        "▸ Plan",
+        "▸ Explore",
       ]);
       const statuses = await ui.findAll({ type: "Text", text: /^ (running|done|failed) / });
       expect(statuses.map((one) => [one.text, one.props.color])).toEqual([
@@ -1973,4 +1980,334 @@ test("rows the engine stacks itself still sit side by side, on every surface", a
     });
     await ui.unmount();
   }
+});
+
+// Amendment 5: richer Crew cards.
+
+const usageOf = (
+  model: string,
+  input: number,
+  output: number,
+  cacheRead: number,
+  cacheCreation = 0,
+) =>
+  ({
+    model,
+    input_tokens: input,
+    output_tokens: output,
+    cache_read_input_tokens: cacheRead,
+    cache_creation_input_tokens: cacheCreation,
+  }) as never;
+
+/** A listed agent with the facts the engine fills in while it runs. */
+const richAgent = (
+  id: string,
+  extra: Partial<AgentInfo> = {},
+): AgentInfo => ({
+  ...agentInfo(id, "Explore", "Find search config in snippets"),
+  model: "claude-opus-5-5",
+  effort: "high",
+  contextWindowSize: 200_000,
+  tokenCount: 82_000,
+  usage: [usageOf("claude-opus-5-5", 2000, 12_000, 270_000, 38_000)],
+  cost: { usd: 0.1375 } as never,
+  ...extra,
+});
+
+/** Mounts the pane, runs the body, unmounts. */
+const onPane = async (
+  $: Engine,
+  surface: (typeof SURFACES)[number],
+  body: (ui: Awaited<ReturnType<Engine["ui"]["mount"]>>) => Promise<void>,
+) => {
+  const ui = await $.ui.mount({ ...PANE, surface });
+  await body(ui);
+  await ui.unmount();
+};
+
+/** The value next to a label of the expanded card. */
+const detailOf = async (
+  ui: { findAll: (query: { type?: string }) => Promise<{ text: string }[]> },
+  label: string,
+): Promise<string | undefined> => {
+  const texts = (await ui.findAll({ type: "Text" })).map((one) => one.text);
+  const index = texts.indexOf(`  ${label}`);
+
+  return index === -1 ? undefined : texts[index + 1];
+};
+
+const press = async ($: Engine, key: string) => {
+  await onPane($, "terminal", async (ui) => {
+    await ui.press({ key });
+  });
+};
+
+test("a collapsed card shows model and effort on line 1, context on its own line", async ($, on) => {
+  world(on, [richAgent("a1")]);
+  await $.turn.start({ text: "go", turnId: "t1", agentId: "a1" });
+
+  for (const surface of SURFACES) {
+    await onPane($, surface, async (ui) => {
+      expect((await ui.find({ type: "Button" }))?.props.label).toBe("▸ Explore");
+      expect(await cardText(ui, /opus/)).toBe(" · opus 5.5 · high");
+      const lines = (await ui.findAll({ type: "Text" })).map((one) => one.text);
+      const calls = lines.findIndex((text) => /tool calls/.test(text));
+      expect(lines[calls + 1]).toBe("  41% context");
+      // Collapsed: no detail rows.
+      expect(await detailOf(ui, "Model")).toBeUndefined();
+    });
+  }
+});
+
+test("no effort and no window size: effort and the context line are left out", async ($, on) => {
+  world(on, [
+    richAgent("a1", { effort: undefined, contextWindowSize: undefined, model: undefined, usage: [] }),
+  ]);
+  await $.turn.start({ text: "go", turnId: "t1", agentId: "a1" });
+
+  await onPane($, "terminal", async (ui) => {
+    expect(await cardText(ui, /^ · /)).toBe(" · -");
+    expect(await cardText(ui, /context/)).toBeUndefined();
+  });
+});
+
+test("pressing a card opens it, again closes it, another moves the opening", async ($, on) => {
+  world(on, [richAgent("a1"), richAgent("a2", { type: "Plan" })]);
+  await $.turn.start({ text: "go", turnId: "t1", agentId: "a1" });
+  await $.turn.start({ text: "go", turnId: "t2", agentId: "a2" });
+
+  await press($, "open-a1");
+  await onPane($, "desktop", async (ui) => {
+    const labels = (await ui.findAll({ type: "Button" })).map((one) => one.props.label);
+    expect(labels.sort()).toEqual(["▸ Plan", "▾ Explore"]);
+    expect(await ui.findAll({ type: "Text", text: /^ {2}Model$/ })).toHaveLength(1);
+  });
+
+  await press($, "open-a2");
+  await onPane($, "terminal", async (ui) => {
+    const labels = (await ui.findAll({ type: "Button" })).map((one) => one.props.label);
+    expect(labels.sort()).toEqual(["▸ Explore", "▾ Plan"]);
+    expect(await ui.findAll({ type: "Text", text: /^ {2}Model$/ })).toHaveLength(1);
+  });
+
+  await press($, "open-a2");
+  await onPane($, "terminal", async (ui) => {
+    expect(await ui.findAll({ type: "Text", text: /^ {2}Model$/ })).toHaveLength(0);
+  });
+});
+
+test("the expanded card shows its facts, tools and tasks", async ($, on) => {
+  world(on, [richAgent("a1")]);
+  await $.turn.start({ text: "go", turnId: "t1", agentId: "a1" });
+  await finished($, "Read", "a1");
+  await finished($, "Grep", "a1");
+  await finished($, "Read", "a1");
+  await $.tool.call({
+    tool: "TodoWrite",
+    todos: [todo("find snippets", "completed"), todo("read config", "in_progress"), todo("sum up", "pending")],
+    agentId: "a1",
+  } as never);
+  await press($, "open-a1");
+
+  for (const surface of SURFACES) {
+    await onPane($, surface, async (ui) => {
+      expect(await detailOf(ui, "Model")).toBe("opus 5.5, effort high");
+      expect(await detailOf(ui, "Context")).toBe("82k / 200k  ██████░░░░░░░░  41%");
+      // in = 2 000 + 38 000 creation + 270 000 read = 310k; cache 270/310.
+      expect(await detailOf(ui, "Tokens")).toBe("in 310k · out 12k · cache 87%");
+      expect(await detailOf(ui, "Cost")).toBe("$0,14");
+      // Counted where tool calls are counted: the subagent's result rows.
+      expect(await detailOf(ui, "Tools")).toBe("Read 2 · Grep 1");
+      // One line per task, each cut short to the width.
+      const texts = (await ui.findAll({ type: "Text" })).map((one) => one.text);
+      const tasks = texts.indexOf("  Tasks");
+      expect([texts[tasks + 1], texts[tasks + 3], texts[tasks + 5]]).toEqual([
+        "✓ find snippets",
+        "● read config",
+        "○ sum up",
+      ]);
+      expect(await detailOf(ui, "Started")).toBe("01:16 by main chat");
+      expect(await detailOf(ui, "Task")).toBe("Find search config in snippets");
+      // Only when they apply.
+      expect(await detailOf(ui, "Where")).toBeUndefined();
+      expect(await detailOf(ui, "Ended")).toBeUndefined();
+    });
+  }
+});
+
+test("a fallback, a worktree, a parent and a failure show in the expanded card", async ($, on) => {
+  world(on, [
+    richAgent("p1", { type: "Plan" }),
+    richAgent("a1", {
+      effort: undefined,
+      cwd: "/work/.claude/worktrees/search-fix",
+      parentId: "p1",
+      usage: [usageOf("claude-opus-5-5", 10, 10, 0), usageOf("claude-sonnet-5-5", 10, 10, 0)],
+      cost: { usd: 0.004 } as never,
+    }),
+  ]);
+  await $.session.start({ cwd: "/work", source: "startup", surface: null } as never);
+  await $.turn.start({ text: "go", turnId: "t0", agentId: "p1" });
+  await $.turn.start({ text: "go", turnId: "t1", agentId: "a1" });
+  await $.turn.complete({
+    answer: "",
+    durationMs: 5,
+    isAborted: true,
+    turnId: "t1",
+    agentId: "a1",
+    reason: "aborted",
+  });
+  await press($, "open-a1");
+
+  await onPane($, "terminal", async (ui) => {
+    expect(await detailOf(ui, "Model")).toBe("opus 5.5 → sonnet 5.5, session effort");
+    expect(await detailOf(ui, "Cost")).toBe("< $0,01");
+    expect(await detailOf(ui, "Where")).toBe("worktree: search-fix");
+    expect(await detailOf(ui, "Started")).toBe("01:16 by Plan");
+    expect(await detailOf(ui, "Ended")).toBe("stopped (aborted)");
+    // The collapsed line shows the model in use now.
+    expect(await cardText(ui, /sonnet/)).toBe(" · sonnet 5.5");
+  });
+});
+
+test("an unknown price shows ?, big counts show M", async ($, on) => {
+  world(on, [
+    richAgent("a1", {
+      contextWindowSize: 1_000_000,
+      tokenCount: 23_671,
+      usage: [usageOf("claude-opus-5-5", 2, 1_250_000, 0)],
+      cost: { usd: 3.2, hasUnknownPrice: true } as never,
+    }),
+  ]);
+  await $.turn.start({ text: "go", turnId: "t1", agentId: "a1" });
+  await press($, "open-a1");
+
+  await onPane($, "terminal", async (ui) => {
+    expect(await detailOf(ui, "Cost")).toBe("?");
+    expect(await detailOf(ui, "Tokens")).toBe("in 2 · out 1.2M · cache 0%");
+    expect(await detailOf(ui, "Context")).toBe("23k / 1M  ░░░░░░░░░░░░░░  2%");
+  });
+});
+
+test("facts follow the agent while it runs and stay once it leaves the list", async ($, on) => {
+  const agents = [richAgent("a1")];
+  const engine = world(on, agents);
+  await $.turn.start({ text: "go", turnId: "t1", agentId: "a1" });
+  // The pane is open (it opened by itself), so the ticker takes new facts.
+  agents[0] = richAgent("a1", { tokenCount: 150_000, cost: { usd: 0.5 } as never });
+  await engine.advance(1000);
+  await press($, "open-a1");
+
+  await onPane($, "terminal", async (ui) => {
+    expect(await cardText(ui, /context/)).toBe("  75% context");
+    expect(await detailOf(ui, "Cost")).toBe("$0,50");
+  });
+
+  await $.turn.complete({
+    answer: "",
+    durationMs: 5,
+    isAborted: false,
+    turnId: "t1",
+    agentId: "a1",
+    reason: "answer",
+  });
+  // The engine drops the finished entry.
+  agents.length = 0;
+  await engine.advance(5000);
+
+  await onPane($, "terminal", async (ui) => {
+    expect(await cardText(ui, /context/)).toBe("  75% context");
+    expect(await detailOf(ui, "Model")).toBe("opus 5.5, effort high");
+    expect(await detailOf(ui, "Cost")).toBe("$0,50");
+  });
+});
+
+test("the next prompt drops the open card with the finished cards", async ($, on) => {
+  world(on, [richAgent("a1")]);
+  await $.turn.start({ text: "go", turnId: "t1", agentId: "a1" });
+  await press($, "open-a1");
+  await $.turn.complete({
+    answer: "",
+    durationMs: 5,
+    isAborted: false,
+    turnId: "t1",
+    agentId: "a1",
+    reason: "answer",
+  });
+  await $.prompt.submit({ text: "next", wait: false, origin: { kind: "composer" } } as never);
+
+  // The same agent resumed gets a new card, which starts closed.
+  await $.turn.start({ text: "again", turnId: "t2", agentId: "a1" });
+  await onPane($, "terminal", async (ui) => {
+    expect((await ui.find({ type: "Button" }))?.props.label).toBe("▸ Explore");
+    expect(await detailOf(ui, "Model")).toBeUndefined();
+  });
+});
+
+test("a card in the session's own folder has no Where row; an error shows failed", async ($, on) => {
+  world(on, [richAgent("a1", { cwd: "/work", tokenCount: 4900, contextWindowSize: 10_000 })]);
+  await $.session.start({ cwd: "/work", source: "startup", surface: null } as never);
+  await $.turn.start({ text: "go", turnId: "t1", agentId: "a1" });
+  await $.turn.complete({
+    answer: "",
+    durationMs: 5,
+    isAborted: false,
+    turnId: "t1",
+    agentId: "a1",
+    reason: "error",
+  });
+  await press($, "open-a1");
+
+  await onPane($, "terminal", async (ui) => {
+    expect(await detailOf(ui, "Where")).toBeUndefined();
+    expect(await detailOf(ui, "Ended")).toBe("failed (error)");
+    expect(await detailOf(ui, "Context")).toBe("4.9k / 10k  ███████░░░░░░░  49%");
+  });
+});
+
+test("a tick that waits past the end keeps the final facts", async ($, on) => {
+  const agents = [richAgent("a1")];
+  let isHolding = false;
+  let release: () => void = () => undefined;
+  let onHeld: () => void = () => undefined;
+  const held = new Promise<void>((resolve) => {
+    onHeld = resolve;
+  });
+  const engine = world(on, agents, {
+    beforeListAnswers: async () => {
+      if (isHolding) {
+        isHolding = false;
+        onHeld();
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      }
+    },
+  });
+  await $.turn.start({ text: "go", turnId: "t1", agentId: "a1" });
+
+  // The tick reads newer facts than the card holds, then waits; meanwhile the
+  // agent ends with its final ones.
+  agents[0] = richAgent("a1", { cost: { usd: 0.5 } as never });
+  isHolding = true;
+  const tick = engine.advance(1000);
+  await held;
+  agents[0] = richAgent("a1", { cost: { usd: 0.9 } as never });
+  await $.turn.complete({
+    answer: "",
+    durationMs: 5,
+    isAborted: false,
+    turnId: "t1",
+    agentId: "a1",
+    reason: "answer",
+  });
+  release();
+  await tick;
+  // Let the held tick finish its write.
+  await engine.advance(0);
+  await press($, "open-a1");
+
+  await onPane($, "terminal", async (ui) => {
+    expect(await detailOf(ui, "Cost")).toBe("$0,90");
+  });
 });

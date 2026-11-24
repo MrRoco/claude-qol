@@ -1,6 +1,6 @@
 {
   "name": "task-bar",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A progress bar above the prompt for Claude's to-do list, and a Crew pane with a live card per subagent",
   "author": { "name": "MrRoco" },
   "license": "MIT",

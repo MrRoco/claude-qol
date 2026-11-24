@@ -6,9 +6,14 @@ Shows how far Claude is with its to-do list, and what its subagents are doing.
   TaskCreate/TaskUpdate), one row shows a bar that fills as items complete, the count (`3/5`)
   and what Claude is doing now. When the last item completes the row shows `All 5 done` until
   you send your next prompt.
-- **Crew pane.** One card per subagent of this chat: its type and task, running/done/failed,
-  elapsed time, tool calls and the last tool it used. A subagent with its own to-do list gets a
-  small bar on its card. Finished cards are cleared at your next prompt.
+- **Crew pane.** One card per subagent of this chat: its type, model and effort, its task,
+  running/done/failed, elapsed time, tool calls and the last tool it used, and how full its
+  context is. A subagent with its own to-do list gets a small bar on its card. Finished cards
+  are cleared at your next prompt.
+- **Card details.** Press a card's title to open it (one at a time; press again to close):
+  model (and any fallback), context, tokens in and out with the cache share, estimated cost in
+  dollars, calls per tool, its full to-do list, its worktree, when and by whom it was started,
+  why it failed, and its full task. A card keeps these after the subagent has finished.
 - **Tidy rows above the prompt.** The mod arranges the rows other mods put above the prompt:
   fresh-start and cache-timer on top (side by side from 100 columns, when both show), other
   mods' rows in their own order below them, and task-bar's bar last, right above the prompt.

@@ -1,12 +1,13 @@
 import { atom, read, update } from "claude-code";
 import type {
+  AgentInfo,
   EngineInterface,
   PromptSubmitInput,
   Register,
   Timer,
 } from "claude-code";
 
-import type { AgentCard, Task, TaskStatus } from "../types";
+import type { AgentCard, AgentFacts, Task, TaskStatus } from "../types";
 
 const PANE_ID = "task-bar-crew";
 const PANE_TITLE = "Crew";
@@ -14,7 +15,12 @@ const PANE_TITLE = "Crew";
 // The bar above the prompt fills its row, never narrower than this.
 const MIN_BAR_CELLS = 10;
 const CARD_BAR_CELLS = 12;
+const CONTEXT_BAR_CELLS = 14;
 const TICK_MS = 1000;
+
+// The expanded card's label column (amendment 5).
+const LABEL_WIDTH = 9;
+const TIME_ZONE = "Europe/Amsterdam";
 
 // Band layout (amendment 4): these plugins' rows on top, in this order, and
 // side by side from this band width; our own row last.
@@ -87,6 +93,10 @@ const agentsAtom = atom({ plugin: "task-bar", key: "agents" } as const, []);
 const paneClosedAtom = atom(
   { plugin: "task-bar", key: "paneClosedByUser" } as const,
   false,
+);
+const openCardAtom = atom(
+  { plugin: "task-bar", key: "openCard" } as const,
+  null,
 );
 
 type Engine = EngineInterface;
@@ -223,11 +233,223 @@ const formatElapsed = (ms: number): string => {
   return minutes > 0 ? `${minutes}m ${rest}s` : `${rest}s`;
 };
 
+/**
+ * A model id as people say it: `claude-opus-5-5` → `opus 5.5`. Any other id
+ * is shown as is; none is `-`.
+ */
+const shortModel = (id: string | undefined): string => {
+  if (id === undefined || id === "") {
+    return "-";
+  }
+
+  const match = /^claude-([a-z]+)-(\d+)-(\d+)/.exec(id);
+
+  return match === null ? id : `${match[1]} ${match[2]}.${match[3]}`;
+};
+
+/** A count in a few characters: 950, 4.9k, 82k, 1.2M, 12M. */
+const compactNumber = (value: number): string => {
+  const scaled = (amount: number, unit: string): string =>
+    amount < 10
+      ? `${(Math.floor(amount * 10) / 10).toString()}${unit}`
+      : `${Math.floor(amount)}${unit}`;
+
+  if (value >= 1_000_000) {
+    return scaled(value / 1_000_000, "M");
+  }
+
+  return value >= 1000 ? scaled(value / 1000, "k") : String(Math.round(value));
+};
+
+/** The estimate in dollars, Dutch style: `$0,14`, `< $0,01`, `?`, `-`. */
+const formatCost = (facts: AgentFacts | undefined): string => {
+  if (facts?.hasUnknownPrice === true) {
+    return "?";
+  }
+
+  const usd = facts?.costUsd;
+
+  if (usd === undefined) {
+    return "-";
+  }
+
+  if (usd > 0 && usd < 0.01) {
+    return "< $0,01";
+  }
+
+  return `$${usd.toFixed(2).replace(".", ",")}`;
+};
+
+/** Clock time of a moment in Amsterdam, `HH:mm`. */
+const formatClock = (ms: number): string => {
+  try {
+    return new Intl.DateTimeFormat("nl-NL", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+      timeZone: TIME_ZONE,
+    }).format(new Date(ms));
+  } catch {
+    // No time zone data: UTC, still a clock time.
+    return new Date(ms).toISOString().slice(11, 16);
+  }
+};
+
+/** The share of the context in use, 0-100; undefined without a window size. */
+const contextPercent = (
+  facts: AgentFacts | undefined,
+): number | undefined => {
+  const size = facts?.contextWindowSize;
+
+  return size === undefined || size <= 0
+    ? undefined
+    : Math.min(100, Math.round(((facts?.tokenCount ?? 0) / size) * 100));
+};
+
+const lastPathPart = (path: string): string => {
+  const parts = path.split(/[\\/]+/).filter((part) => part !== "");
+
+  return parts[parts.length - 1] ?? path;
+};
+
+/**
+ * The facts a card keeps of an agent list entry: numbers, model ids and a
+ * folder name only. `root` is the session's folder, when known.
+ */
+const toFacts = (
+  info: AgentInfo,
+  root: string | undefined,
+  cards: readonly AgentCard[],
+): AgentFacts => {
+  const usage = info.usage ?? [];
+  const models: string[] = [];
+
+  for (const entry of usage) {
+    if (typeof entry.model === "string" && !models.includes(entry.model)) {
+      models.push(entry.model);
+    }
+  }
+
+  const sum = (pick: (entry: (typeof usage)[number]) => number): number =>
+    usage.reduce((total, entry) => total + (pick(entry) || 0), 0);
+  const parentType =
+    info.parentId === undefined
+      ? undefined
+      : cards.find((card) => card.id === info.parentId)?.type;
+  const isWorktree =
+    root !== undefined && info.cwd !== "" && info.cwd !== root;
+
+  return {
+    model: models[models.length - 1] ?? info.model,
+    models,
+    ...(info.effort === undefined ? {} : { effort: String(info.effort) }),
+    ...(info.contextWindowSize === undefined
+      ? {}
+      : { contextWindowSize: info.contextWindowSize }),
+    tokenCount: info.tokenCount,
+    inputTokens: sum(
+      (entry) =>
+        entry.input_tokens +
+        entry.cache_creation_input_tokens +
+        entry.cache_read_input_tokens,
+    ),
+    outputTokens: sum((entry) => entry.output_tokens),
+    cacheReadTokens: sum((entry) => entry.cache_read_input_tokens),
+    ...(info.cost === undefined ? {} : { costUsd: info.cost.usd }),
+    ...(info.cost?.hasUnknownPrice === true ? { hasUnknownPrice: true } : {}),
+    ...(isWorktree ? { worktree: lastPathPart(info.cwd) } : {}),
+    ...(parentType === undefined ? {} : { parentType }),
+  };
+};
+
+/** `opus 5.5, effort high`; a fallback shows its path; `-` when unknown. */
+const modelLine = (facts: AgentFacts | undefined): string => {
+  if (facts === undefined) {
+    return "-";
+  }
+
+  const path =
+    facts.models.length > 1
+      ? facts.models.map(shortModel).join(" → ")
+      : shortModel(facts.model);
+  const effort =
+    facts.effort === undefined ? "session effort" : `effort ${facts.effort}`;
+
+  return `${path}, ${effort}`;
+};
+
+/** `82k / 200k ████████░░░░░░ 41%`; `-` without a window size. */
+const contextLine = (facts: AgentFacts | undefined): string => {
+  const percent = contextPercent(facts);
+
+  if (facts?.contextWindowSize === undefined || percent === undefined) {
+    return "-";
+  }
+
+  const filled = filledCells(percent, 100, CONTEXT_BAR_CELLS);
+
+  return `${compactNumber(facts.tokenCount)} / ${compactNumber(facts.contextWindowSize)}  ${"█".repeat(filled)}${"░".repeat(CONTEXT_BAR_CELLS - filled)}  ${percent}%`;
+};
+
+/** `in 310k · out 12k · cache 88%`; `-` before the first reading. */
+const tokensLine = (facts: AgentFacts | undefined): string => {
+  if (facts === undefined || facts.inputTokens + facts.outputTokens === 0) {
+    return "-";
+  }
+
+  const cache =
+    facts.inputTokens > 0
+      ? ` · cache ${Math.round((facts.cacheReadTokens / facts.inputTokens) * 100)}%`
+      : "";
+
+  return `in ${compactNumber(facts.inputTokens)} · out ${compactNumber(facts.outputTokens)}${cache}`;
+};
+
+/** `Read 11 · Grep 9 · Bash 3`, most used first; `-` when none. */
+const toolsLine = (
+  counts: Readonly<Record<string, number>> | undefined,
+): string => {
+  const entries = Object.entries(counts ?? {}).sort(
+    ([nameA, countA], [nameB, countB]) =>
+      countB - countA || nameA.localeCompare(nameB),
+  );
+
+  return entries.length === 0
+    ? "-"
+    : entries.map(([name, count]) => `${name} ${count}`).join(" · ");
+};
+
+/** A task's mark: `✓` done, `●` in progress, `○` pending. */
+const taskMark = (task: Task): string =>
+  task.status === "completed"
+    ? "✓"
+    : task.status === "in_progress"
+      ? "●"
+      : "○";
+
+const sameFacts = (
+  one: AgentFacts | undefined,
+  other: AgentFacts | undefined,
+): boolean => JSON.stringify(one) === JSON.stringify(other);
+
+const countTool = (card: AgentCard, tool: string): AgentCard => ({
+  ...card,
+  toolCalls: card.toolCalls + 1,
+  lastTool: tool,
+  // A card made before amendment 5 (state outlives a reload) has no counts.
+  toolCounts: {
+    ...(card.toolCounts ?? {}),
+    [tool]: (card.toolCounts?.[tool] ?? 0) + 1,
+  },
+});
+
 // The ticker lives in the module: nothing is drawn from it, and a reload stops it.
 let ticker: Timer | undefined;
 let hasAutoOpened = false;
 // Whether the Crew pane is open, as far as this copy of the module has seen.
 let isPaneOpen = false;
+// The session's folder, from `session.start`: a worktree card names its own.
+let sessionRoot: string | undefined;
 // Whether this load registered the progress tool; reminders only then.
 let isToolRegistered = false;
 // Bumped by every main-loop progress call, so a reminder decided while it
@@ -283,6 +505,50 @@ const resetAll = async ($: Engine): Promise<void> => {
   await update($, goalAtom, () => null);
   await update($, agentsAtom, () => []);
   await update($, paneClosedAtom, () => false);
+  await update($, openCardAtom, () => null);
+};
+
+/**
+ * Takes a new snapshot of the listed agents' facts into their cards (only
+ * running ones, or `ids`). Writes nothing when no card changed; an agent no
+ * longer listed keeps its last facts.
+ */
+const refreshFacts = async (
+  $: Engine,
+  ids?: readonly string[],
+): Promise<readonly AgentCard[]> => {
+  const infos = await $.agent.list();
+  const cards = await read($, agentsAtom);
+  const wanted = (card: AgentCard): boolean =>
+    ids === undefined ? card.status === "running" : ids.includes(card.id);
+  // Worked out against the cards as read; applied in one synchronous update.
+  const fresh = new Map<string, AgentFacts>();
+
+  for (const card of cards) {
+    const info = infos.find((one) => one.id === card.id);
+
+    if (wanted(card) && info !== undefined) {
+      const facts = toFacts(info, sessionRoot, cards);
+
+      if (!sameFacts(facts, card.facts)) {
+        fresh.set(card.id, facts);
+      }
+    }
+  }
+
+  if (fresh.size === 0) {
+    return cards;
+  }
+
+  // Checked again inside the update: a card that ended meanwhile took its
+  // final snapshot at turn.complete, which an older tick must not overwrite.
+  return update($, agentsAtom, (list) =>
+    list.map((card) => {
+      const facts = fresh.get(card.id);
+
+      return facts === undefined || !wanted(card) ? card : { ...card, facts };
+    }),
+  );
 };
 
 /**
@@ -294,7 +560,13 @@ const syncTicker = ($: Engine, agents: readonly AgentCard[]): void => {
     isPaneOpen && agents.some((card) => card.status === "running");
 
   if (shouldTick && ticker === undefined) {
-    ticker = $.clock.every(TICK_MS, () => $.ui.invalidate("ui.render"));
+    // Each tick also takes the running cards' facts; a failed read still
+    // redraws the elapsed time.
+    ticker = $.clock.every(TICK_MS, () =>
+      safely(async () => {
+        await refreshFacts($);
+      }).then(() => $.ui.invalidate("ui.render")),
+    );
   } else if (!shouldTick && ticker !== undefined) {
     ticker.cancel();
     ticker = undefined;
@@ -452,6 +724,7 @@ export const register: Register = (on) => {
   // reload, a worker respawn), so it registers but never resets: the state
   // outlives a reload. A new session starts with empty state anyway.
   on("session.start", async ($, e, next) => {
+    sessionRoot = e.cwd === "" ? undefined : e.cwd;
     await safely(async () => {
       await $.command.register({
         name: "crew",
@@ -522,6 +795,10 @@ export const register: Register = (on) => {
           list.filter((card) => card.status === "running"),
         );
         syncTicker($, cards);
+        // The open card goes with its card.
+        await update($, openCardAtom, (open) =>
+          cards.some((card) => card.id === open) ? open : null,
+        );
         // A finished list has been seen: clear it. An unfinished one stays.
         const tasks = await update($, tasksAtom, (list) =>
           isAllDone(list) ? [] : list,
@@ -564,6 +841,8 @@ export const register: Register = (on) => {
           startedAt: await $.clock.now(),
           toolCalls: 0,
           tasks: [],
+          toolCounts: {},
+          facts: toFacts(info, sessionRoot, known),
         };
         const cards = await update($, agentsAtom, (list) =>
           list.some((one) => one.id === agentId) ? list : [...list, card],
@@ -592,12 +871,19 @@ export const register: Register = (on) => {
         const endedAt = await $.clock.now();
         const status =
           e.reason === "error" || e.reason === "aborted" ? "failed" : "done";
-        const cards = await changeCard($, agentId, (card) => ({
+        const reason =
+          e.reason === "error" || e.reason === "aborted" ? e.reason : undefined;
+        await changeCard($, agentId, (card) => ({
           ...card,
           status,
           endedAt,
+          ...(reason === undefined ? {} : { endReason: reason }),
         }));
-        syncTicker($, cards);
+        // The last snapshot: the engine drops the entry some time later.
+        await safely(async () => {
+          await refreshFacts($, [agentId]);
+        });
+        syncTicker($, await read($, agentsAtom));
       });
     }
 
@@ -625,11 +911,7 @@ export const register: Register = (on) => {
       // Answered here, so it is counted here: no PostToolUse is relied on.
       if (agentId !== undefined) {
         await safely(async () => {
-          await changeCard($, agentId, (card) => ({
-            ...card,
-            toolCalls: card.toolCalls + 1,
-            lastTool: tool,
-          }));
+          await changeCard($, agentId, (card) => countTool(card, tool));
         });
       }
 
@@ -776,11 +1058,7 @@ export const register: Register = (on) => {
     ) {
       const tool = origin.tool;
       await safely(async () => {
-        await changeCard($, agentId, (card) => ({
-          ...card,
-          toolCalls: card.toolCalls + 1,
-          lastTool: tool,
-        }));
+        await changeCard($, agentId, (card) => countTool(card, tool));
       });
     }
 
@@ -944,8 +1222,9 @@ export const register: Register = (on) => {
   });
 
   on("ui.render", { component: "Pane", requestId: PANE_ID }, async ($, e) => {
-    const { Box, Text } = $.ui.resolve(e);
+    const { Box, Button, Text } = $.ui.resolve(e);
     const agents = await read($, agentsAtom);
+    const openCard = await read($, openCardAtom);
 
     // A pane that draws is open: after a reload, which stops the ticker, this
     // starts it again. Drawing never fails over the ticker.
@@ -968,6 +1247,34 @@ export const register: Register = (on) => {
     const newestFirst = [...agents]
       .reverse()
       .sort((a, b) => b.startedAt - a.startedAt);
+
+    // One card open at a time: a press opens it, or closes it when it is
+    // the open one.
+    const toggle = (id: string): void => {
+      void safely(async () => {
+        await update($, openCardAtom, (open) => (open === id ? null : id));
+      });
+    };
+
+    /** One row of the expanded card: the label column, then its value. */
+    const detail = (
+      label: string,
+      value: string,
+      isWrapped = false,
+      key = `detail-${label}`,
+    ) => (
+      <Box key={key} flexDirection="row">
+        <Box flexShrink={0} width={LABEL_WIDTH + 2}>
+          <Text color={ACCENT}>
+            {"  "}
+            {label}
+          </Text>
+        </Box>
+        <Box flexGrow={1} flexShrink={1}>
+          <Text wrap={isWrapped ? "wrap" : "truncate-end"}>{value}</Text>
+        </Box>
+      </Box>
+    );
 
     // Cards sit border to border, newest first.
     return (
@@ -992,15 +1299,22 @@ export const register: Register = (on) => {
                 : card.status === "failed"
                   ? "diffRemovedDimmed"
                   : undefined;
+          const facts = card.facts;
+          const isOpen = openCard === card.id;
           const elapsed = formatElapsed((card.endedAt ?? now) - card.startedAt);
           const calls = `${card.toolCalls} tool ${card.toolCalls === 1 ? "call" : "calls"}`;
           const last =
             card.lastTool === undefined ? "" : ` · last: ${card.lastTool}`;
+          const model = shortModel(facts?.model);
+          const effort =
+            facts?.effort === undefined ? "" : ` · ${facts.effort}`;
+          const percent = contextPercent(facts);
           const done = countDone(card.tasks);
           const filled = filledCells(done, card.tasks.length, CARD_BAR_CELLS);
 
           return (
             <Box
+              key={`card-${card.id}`}
               flexDirection="column"
               borderStyle="round"
               borderColor={dot}
@@ -1011,9 +1325,16 @@ export const register: Register = (on) => {
                 <Box flexShrink={0}>
                   <Text color={dot}>● </Text>
                 </Box>
-                <Box flexGrow={1}>
-                  <Text weight="bold" wrap="truncate-end">
-                    {card.type}
+                <Box flexShrink={0}>
+                  <Button
+                    key={`open-${card.id}`}
+                    label={`${isOpen ? "▾" : "▸"} ${card.type}`}
+                    onPress={() => toggle(card.id)}
+                  />
+                </Box>
+                <Box flexGrow={1} flexShrink={1}>
+                  <Text dimColor wrap="truncate-end">
+                    {` · ${model}${effort}`}
                   </Text>
                 </Box>
                 <Box flexShrink={0}>
@@ -1032,6 +1353,12 @@ export const register: Register = (on) => {
                 {calls}
                 {last}
               </Text>
+              {percent !== undefined && (
+                <Text dimColor wrap="truncate-end">
+                  {"  "}
+                  {percent}% context
+                </Text>
+              )}
               {card.tasks.length > 0 && (
                 <Box flexDirection="row">
                   <Box flexShrink={0}>
@@ -1048,6 +1375,37 @@ export const register: Register = (on) => {
                       ▏ {done}/{card.tasks.length}
                     </Text>
                   </Box>
+                </Box>
+              )}
+              {isOpen && (
+                <Box flexDirection="column" marginTop={1}>
+                  {detail("Model", modelLine(facts))}
+                  {detail("Context", contextLine(facts))}
+                  {detail("Tokens", tokensLine(facts))}
+                  {detail("Cost", formatCost(facts))}
+                  {detail("Tools", toolsLine(card.toolCounts))}
+                  {card.tasks.map((task, index) =>
+                    detail(
+                      index === 0 ? "Tasks" : "",
+                      `${taskMark(task)} ${task.title}`,
+                      false,
+                      `task-${task.id}`,
+                    ),
+                  )}
+                  {facts?.worktree !== undefined &&
+                    detail("Where", `worktree: ${facts.worktree}`)}
+                  {detail(
+                    "Started",
+                    `${formatClock(card.startedAt)} by ${facts?.parentType ?? "main chat"}`,
+                  )}
+                  {card.status === "failed" &&
+                    detail(
+                      "Ended",
+                      card.endReason === "aborted"
+                        ? "stopped (aborted)"
+                        : "failed (error)",
+                    )}
+                  {detail("Task", card.description, true)}
                 </Box>
               )}
             </Box>
