@@ -16,6 +16,10 @@ prompt…`.
   the sections `## Task`, `## Context`, `## Constraints` and `## Done when`, in the language you
   wrote in, using your answers. It lands in the prompt box for you to read, edit and send
   yourself. If you typed something in the box meanwhile, the brief is added below it.
+- **Skipped everything? Only tidied.** When questions were asked and none was answered, there
+  is nothing to build a brief on. The second request then only makes your text easier to read
+  (order, grammar, short paragraphs or a list), in your language, with no sections and nothing
+  added.
 - **Cancel sends your prompt as is.** **Cancel** (at any step) sends your original prompt
   exactly as you entered it, without shaping. Should that send be refused, the prompt goes back
   in the box with `>>` in front, so Enter sends it unchanged. A prompt with an `@file` mention
@@ -58,7 +62,7 @@ In Claude Code's config menu, or under `pluginConfigs` for `prompt-shaper` in yo
 ## Cost
 
 Each caught prompt makes two small requests on the chosen model (one for the questions, one
-for the brief); a prompt with no questions still makes both. On `haiku` that is well under one
+for the brief or the tidied text); a prompt with no questions still makes both. On `haiku` that is well under one
 cent per prompt; `sonnet` costs more. The requests are billed to the same account as your chat
 and show in `/usage` as mod model calls.
 

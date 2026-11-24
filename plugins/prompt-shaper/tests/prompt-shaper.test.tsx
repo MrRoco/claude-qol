@@ -18,6 +18,8 @@ const FAILED = "Could not shape the prompt; your text is back in the box.";
 const QUESTIONS_START =
   "You review a prompt someone wants to send to a coding assistant.";
 const BRIEF_START = "Rewrite the prompt into a brief for a coding assistant";
+const TIDY_START = "Rewrite the text so it reads clearly";
+const TIDY_READY = "Tidied text ready in the prompt box. Edit and send it.";
 const HINT =
   "Answer in the prompt box and press Enter. Start with >> to send Claude a message instead.";
 const noted = (number: number, total: number) =>
@@ -373,7 +375,7 @@ test("three questions: answer, skip, answer; the brief gets two Q/A pairs", asyn
   }
 });
 
-test("Skip all goes straight to writing with no answers", async ($, on) => {
+test("Skip all only tidies the text, adding nothing", async ($, on) => {
   const engine = world(on);
   engine.replies.push('{"questions": ["One?", "Two?"]}');
   await catchLong($);
@@ -387,13 +389,53 @@ test("Skip all goes straight to writing with no answers", async ($, on) => {
 
   for (const surface of SURFACES) {
     expect(await rowText($, surface)).toBe(
-      "◇ prompt-shaper · writing the brief…",
+      "◇ prompt-shaper · tidying your text…",
     );
   }
 
-  expect(engine.requests[1]?.prompt).toBe(LONG);
+  const tidy = engine.requests[1];
+  expect(tidy?.system?.startsWith(TIDY_START)).toBe(true);
+  expect(tidy?.system).toContain("Add no headings, sections, assumptions");
+  expect(tidy?.prompt).toBe(LONG);
   await engine.release();
   expect(engine.filled).toEqual([{ text: MARKED, mode: "replace" }]);
+  expect(engine.toasts).toEqual([TIDY_READY]);
+});
+
+test("every question skipped one by one also only tidies", async ($, on) => {
+  const engine = world(on);
+  engine.replies.push('{"questions": ["One?", "Two?"]}', "Tidy text.");
+  await catchLong($);
+
+  for (const key of ["skip", "skip"]) {
+    await onBand($, "terminal", async (ui) => {
+      await ui.press({ key });
+    });
+  }
+  await settle();
+
+  expect(engine.requests[1]?.system?.startsWith(TIDY_START)).toBe(true);
+  expect(engine.requests[1]?.prompt).toBe(LONG);
+  expect(engine.filled).toEqual([{ text: ">> Tidy text.", mode: "replace" }]);
+  expect(engine.toasts).toEqual([TIDY_READY]);
+});
+
+test("one answer, then Skip all, still writes a brief", async ($, on) => {
+  const engine = world(on);
+  engine.replies.push('{"questions": ["One?", "Two?", "Three?"]}', BRIEF);
+  await catchLong($);
+
+  expect(await submit($, "Yes")).toEqual(noted(1, 3));
+  await onBand($, "desktop", async (ui) => {
+    await ui.press({ key: "skip-all" });
+  });
+  await settle();
+
+  expect(engine.requests[1]?.system?.startsWith(BRIEF_START)).toBe(true);
+  expect(engine.requests[1]?.prompt).toBe(
+    `${LONG}\n\nAnswers:\nQ: One? A: Yes`,
+  );
+  expect(engine.toasts).toEqual([READY]);
 });
 
 test("while asking, >> prompts, slash commands and images go to Claude", async ($, on) => {

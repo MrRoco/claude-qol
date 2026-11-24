@@ -68,6 +68,8 @@ Expected:
       Skip one.
 - [ ] A brief with `## Task`, `## Context`, `## Constraints`, `## Done when` lands in the prompt
       box, in the language of the prompt. It is not sent.
+- [ ] Again, but **Skip all** at the first question: tidied text without sections lands in the
+      box, with nothing added.
 - [ ] While a question is open, `>> what is 2+2` is sent to Claude at once, without the `>>`.
 - [ ] **Cancel** sends the original to Claude as is.
 

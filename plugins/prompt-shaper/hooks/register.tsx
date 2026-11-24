@@ -38,15 +38,24 @@ Keep every fact, name, path and requirement; add nothing that was not said or an
 exactly these Markdown sections: ## Task, ## Context, ## Constraints, ## Done when. Leave a
 section out only if there is nothing for it. Reply with the brief only.`;
 
+// For a run whose questions were all skipped: no answers to build a brief on,
+// so the text is only made easier to read.
+const TIDY_SYSTEM = `Rewrite the text so it reads clearly, in the language of the text. Keep every fact, name,
+path and requirement, and the writer's intent. Fix order, grammar and typos; use short
+paragraphs or a list where that helps. Add no headings, sections, assumptions or information
+that is not in the text. Reply with the rewritten text only.`;
+
 const TEXT_DROP = "prompt-shaper is reading your prompt.";
 const TEXT_USAGE = "Usage: /shape <your prompt>";
 const TEXT_BUSY = "prompt-shaper is already busy with a prompt.";
 const TEXT_STARTED = "Shaping your prompt.";
 const TEXT_NOT_STARTED = "prompt-shaper could not start.";
 const TEXT_READY = "Brief ready in the prompt box. Edit and send it.";
+const TEXT_TIDY_READY = "Tidied text ready in the prompt box. Edit and send it.";
 const TEXT_FAILED = "Could not shape the prompt; your text is back in the box.";
 const TEXT_READING = "◇ prompt-shaper · reading your prompt…";
 const TEXT_WRITING = "◇ prompt-shaper · writing the brief…";
+const TEXT_TIDYING = "◇ prompt-shaper · tidying your text…";
 const TEXT_ANSWER_HINT =
   "Answer in the prompt box and press Enter. Start with >> to send Claude a message instead.";
 const answerNoted = (number: number, total: number): string =>
@@ -166,6 +175,17 @@ const parseQuestions = (reply: string): string[] => {
 
   return asQuestions(strings);
 };
+
+/**
+ * Whether the run only gets its text tidied: questions were asked and none
+ * of them was answered.
+ */
+const isTidyRun = (
+  questions: readonly string[],
+  answers: readonly (string | null)[],
+): boolean =>
+  questions.length > 0 &&
+  !answers.some((answer) => typeof answer === "string");
 
 /** The brief request's prompt: the original, then each answered question. */
 const briefPrompt = (
@@ -319,15 +339,15 @@ const sendOriginal = async ($: Engine, text: string): Promise<boolean> => {
 };
 
 /**
- * Ends `run` when it is still the active one. The brief goes to the prompt
- * box; on Cancel the original is sent as entered; on failure and `/clear`
+ * Ends `run` when it is still the active one. The brief (or tidied text) goes
+ * to the prompt box; on Cancel the original is sent as entered; on failure and `/clear`
  * (`restore`) the original goes back to the box. Taken synchronously, so a
  * late reply or a second press finds the run gone.
  */
 const endRun = async (
   $: Engine,
   run: number,
-  outcome: "brief" | "cancel" | "restore" | "failed",
+  outcome: "brief" | "tidy" | "cancel" | "restore" | "failed",
   brief = "",
 ): Promise<void> => {
   if (run !== activeRun) {
@@ -335,7 +355,8 @@ const endRun = async (
   }
 
   activeRun = null;
-  const text = outcome === "brief" ? brief : (original ?? "");
+  const isShaped = outcome === "brief" || outcome === "tidy";
+  const text = isShaped ? brief : (original ?? "");
   original = null;
 
   await safely(() => resetState($));
@@ -350,11 +371,13 @@ const endRun = async (
 
   // A brief, or an original whose send was refused, carries the marker:
   // pressing Enter then sends it unchanged instead of shaping it again.
-  const isMarked = outcome === "brief" || outcome === "cancel";
+  const isMarked = isShaped || outcome === "cancel";
 
   if (await fillBox($, text, isMarked)) {
     if (outcome === "brief") {
       $.ui.toast(TEXT_READY);
+    } else if (outcome === "tidy") {
+      $.ui.toast(TEXT_TIDY_READY);
     } else if (outcome === "failed") {
       $.ui.toast(TEXT_FAILED);
     }
@@ -373,7 +396,10 @@ const endRun = async (
   }
 };
 
-/** Asks for the brief once the questions are done. */
+/**
+ * Asks for the brief once the questions are done; when every question was
+ * skipped, for the tidied text instead.
+ */
 const writeBrief = async (
   $: Engine,
   settings: Settings,
@@ -387,15 +413,21 @@ const writeBrief = async (
 
   const questions = await read($, questionsAtom);
   const answers = await read($, answersAtom);
+  const isTidy = isTidyRun(questions, answers);
   const reply = await ask(
     $,
     settings,
-    BRIEF_SYSTEM,
-    briefPrompt(text, questions, answers),
+    isTidy ? TIDY_SYSTEM : BRIEF_SYSTEM,
+    isTidy ? text : briefPrompt(text, questions, answers),
   );
   const brief = reply?.trim() ?? "";
 
-  await endRun($, run, brief === "" ? "failed" : "brief", brief);
+  await endRun(
+    $,
+    run,
+    brief === "" ? "failed" : isTidy ? "tidy" : "brief",
+    brief,
+  );
 };
 
 /** Moves `run` on to writing, when it is still active, and asks for the brief. */
@@ -888,9 +920,19 @@ export const register: Register = (on, options) => {
       }
     }
 
+    let busy = TEXT_READING;
+
+    if (step === "writing") {
+      const isTidy = isTidyRun(
+        await read($, questionsAtom),
+        await read($, answersAtom),
+      );
+      busy = isTidy ? TEXT_TIDYING : TEXT_WRITING;
+    }
+
     return (
       <Box flexDirection="row" width={columns}>
-        {lead(step === "writing" ? TEXT_WRITING : TEXT_READING)}
+        {lead(busy)}
         {cancelButton}
       </Box>
     );
