@@ -13,11 +13,16 @@ prompt…`.
   the sections `## Task`, `## Context`, `## Constraints` and `## Done when`, in the language you
   wrote in, using your answers. It lands in the prompt box for you to read, edit and send
   yourself. If you typed something in the box meanwhile, the brief is added below it.
-- **Your text is never lost.** **Cancel** (at any step), a failed request or a `/clear` puts your
-  original prompt back in the box. If the box cannot take the text, the row shows it instead,
-  with **Close**.
+- **Cancel sends your prompt as is.** **Cancel** (at any step) sends your original prompt
+  exactly as you entered it, without shaping. Should that send be refused, the prompt goes back
+  in the box with `>>` in front, so Enter sends it unchanged. A prompt with an `@file` mention
+  also goes back in the box that way, because only a prompt sent from the box gets its files
+  attached.
+- **Your text is never lost.** A failed request or a `/clear` puts your original prompt back in
+  the box. If the box cannot take the text, the row shows it instead, with **Close**.
 
-The mod never sends anything to the chat on its own: you always press Enter on the brief.
+The mod sends a prompt on its own only when you press **Cancel**, and then only your own
+original text. A brief is never sent for you: you always press Enter on it.
 
 ## Install
 

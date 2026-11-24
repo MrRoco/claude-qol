@@ -68,6 +68,10 @@ type World = {
   // What the prompt box holds when the mod reads it.
   box: string;
   isFillRefused: boolean;
+  // While set, a prompt the mod sends itself is dropped beneath it.
+  isSendRefused: boolean;
+  // While set, a prompt the mod sends itself fails beneath it.
+  isSendThrowing: boolean;
 };
 
 // The test runtime has a timer; the hooks' typings (es2023 only) name none.
@@ -102,6 +106,8 @@ const world = (on: On): World => {
     },
     box: "",
     isFillRefused: false,
+    isSendRefused: false,
+    isSendThrowing: false,
   };
 
   on("command.register", (_, e) => {
@@ -119,6 +125,14 @@ const world = (on: On): World => {
     return { value: undefined };
   });
   on("prompt.submit", (_, e) => {
+    if (result.isSendThrowing && e.origin.kind === "plugin") {
+      throw new Error("send failed");
+    }
+
+    if (result.isSendRefused && e.origin.kind === "plugin") {
+      return { drop: "refused" };
+    }
+
     result.entered.push(e.text);
 
     return { text: e.text };
@@ -441,12 +455,13 @@ test("the brief comes after text typed meanwhile, the marker before both", async
   expect(engine.toasts).toEqual([READY]);
 });
 
-test("Cancel puts the original back; a late answer is ignored", async ($, on) => {
+test("Cancel sends the original as entered; a late answer is ignored", async ($, on) => {
   const engine = world(on);
 
   for (const surface of SURFACES) {
     engine.requests.length = 0;
     engine.filled.length = 0;
+    engine.entered.length = 0;
     engine.isHolding = true;
     engine.replies.push('{"questions": ["Late?"]}');
     await catchLong($);
@@ -455,19 +470,22 @@ test("Cancel puts the original back; a late answer is ignored", async ($, on) =>
       await ui.press({ key: "cancel" });
     });
 
-    expect(engine.filled).toEqual([{ text: LONG, mode: "replace" }]);
+    // Sent once, unchanged and not caught again; the box is left alone.
+    expect(engine.entered).toEqual([LONG]);
+    expect(engine.filled).toEqual([]);
     expect(engine.toasts).toEqual([]);
     expect(await isRowEmpty($, surface)).toBe(true);
 
     // The cancelled run's reply arrives: nothing moves.
     await engine.release();
     expect(engine.requests.length).toBe(1);
-    expect(engine.filled.length).toBe(1);
+    expect(engine.entered).toEqual([LONG]);
+    expect(engine.filled).toEqual([]);
     expect(await isRowEmpty($, surface)).toBe(true);
   }
 });
 
-test("Cancel while asking or writing puts the original back", async ($, on) => {
+test("Cancel while asking or writing sends the original", async ($, on) => {
   const engine = world(on);
   engine.replies.push('{"questions": ["One?"]}');
   await catchLong($);
@@ -475,9 +493,9 @@ test("Cancel while asking or writing puts the original back", async ($, on) => {
   await onBand($, "terminal", async (ui) => {
     await ui.press({ key: "cancel" });
   });
-  expect(engine.filled).toEqual([{ text: LONG, mode: "replace" }]);
+  expect(engine.entered).toEqual([LONG]);
 
-  engine.filled.length = 0;
+  engine.entered.length = 0;
   engine.isHolding = true;
   engine.replies.push('{"questions": []}', BRIEF);
   await catchLong($);
@@ -491,7 +509,8 @@ test("Cancel while asking or writing puts the original back", async ($, on) => {
   });
   await engine.release();
 
-  expect(engine.filled).toEqual([{ text: LONG, mode: "replace" }]);
+  expect(engine.entered).toEqual([LONG]);
+  expect(engine.filled).toEqual([]);
   expect(engine.toasts).toEqual([]);
 });
 
@@ -502,6 +521,7 @@ test("a request that is not answered puts the original back", async ($, on) => {
   engine.replies.push(null);
   await catchLong($);
   expect(engine.filled).toEqual([{ text: LONG, mode: "replace" }]);
+  expect(engine.entered).toEqual([]);
   expect(engine.toasts).toEqual([FAILED]);
   expect(await isRowEmpty($, "terminal")).toBe(true);
 
@@ -663,6 +683,7 @@ test("/clear ends a run and puts the original back", async ($, on) => {
   ).toEqual({ sessionId: "s1" });
   await settle();
   expect(engine.filled).toEqual([{ text: LONG, mode: "replace" }]);
+  expect(engine.entered).toEqual([]);
 
   await engine.release();
   expect(engine.requests.length).toBe(1);
@@ -758,7 +779,7 @@ test("a cancel while the questions are being written leaves none behind", async 
   engine.replies.push('{"questions": ["One?"]}');
   await catchLong($);
 
-  expect(engine.filled).toEqual([{ text: LONG, mode: "replace" }]);
+  expect(engine.entered).toEqual([LONG]);
   // The last questions written are none.
   expect(written[written.length - 1]).toEqual([]);
   for (const surface of SURFACES) {
@@ -803,7 +824,7 @@ test("a draft that already starts with >> gets no second marker", async ($, on) 
   ]);
 });
 
-test("Cancel with text typed meanwhile appends the original, unmarked", async ($, on) => {
+test("Cancel with text typed meanwhile sends the original and leaves the box", async ($, on) => {
   const engine = world(on);
   engine.box = "typed while waiting";
   engine.isHolding = true;
@@ -815,5 +836,58 @@ test("Cancel with text typed meanwhile appends the original, unmarked", async ($
   });
   await settle();
 
-  expect(engine.filled).toEqual([{ text: `\n\n${LONG}`, mode: "append" }]);
+  expect(engine.entered).toEqual([LONG]);
+  expect(engine.filled).toEqual([]);
+});
+
+test("Cancel whose send is refused puts the original back, marked", async ($, on) => {
+  const engine = world(on);
+  engine.isSendRefused = true;
+  engine.isHolding = true;
+  engine.replies.push('{"questions": []}');
+  await catchLong($);
+
+  await onBand($, "terminal", async (ui) => {
+    await ui.press({ key: "cancel" });
+  });
+  await settle();
+
+  expect(engine.entered).toEqual([]);
+  // Enter then sends it unchanged: the guard removes the marker.
+  expect(engine.filled).toEqual([{ text: `>> ${LONG}`, mode: "replace" }]);
+  expect((await submit($, `>> ${LONG}`)).text).toBe(LONG);
+});
+
+test("Cancel on a prompt with an @ mention puts it back marked, unsent", async ($, on) => {
+  const engine = world(on);
+  const withMention = `${LONG} See @src/Importer.php for the current code.`;
+  engine.isHolding = true;
+  engine.replies.push('{"questions": []}');
+  await catchLong($, withMention);
+
+  await onBand($, "terminal", async (ui) => {
+    await ui.press({ key: "cancel" });
+  });
+  await settle();
+
+  expect(engine.entered).toEqual([]);
+  expect(engine.filled).toEqual([
+    { text: `>> ${withMention}`, mode: "replace" },
+  ]);
+});
+
+test("Cancel whose send throws puts the original back, marked", async ($, on) => {
+  const engine = world(on);
+  engine.isSendThrowing = true;
+  engine.isHolding = true;
+  engine.replies.push('{"questions": []}');
+  await catchLong($);
+
+  await onBand($, "terminal", async (ui) => {
+    await ui.press({ key: "cancel" });
+  });
+  await settle();
+
+  expect(engine.entered).toEqual([]);
+  expect(engine.filled).toEqual([{ text: `>> ${LONG}`, mode: "replace" }]);
 });

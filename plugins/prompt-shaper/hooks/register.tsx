@@ -261,15 +261,41 @@ const fillBox = async (
   }
 };
 
+// An `@path` mention: the engine expands it only for a prompt sent from the
+// box, never for one a plugin sends.
+const MENTION = /(^|\s)@\S/;
+
 /**
- * Ends `run` when it is still the active one: the brief (or, on Cancel and
- * failure, the original) goes to the prompt box. Taken synchronously, so a
+ * Sends the original exactly as it was entered, as the person's own prompt.
+ * A plugin origin passes the guard, so it is not caught again. Whether it was
+ * sent.
+ */
+const sendOriginal = async ($: Engine, text: string): Promise<boolean> => {
+  // Sent by the mod, its file mentions would reach the model as plain text:
+  // it goes back to the box instead (marked), where Enter expands them.
+  if (MENTION.test(text)) {
+    return false;
+  }
+
+  try {
+    const result = await $.prompt.submit({ text, asUser: true });
+
+    return result.drop === undefined;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Ends `run` when it is still the active one. The brief goes to the prompt
+ * box; on Cancel the original is sent as entered; on failure and `/clear`
+ * (`restore`) the original goes back to the box. Taken synchronously, so a
  * late reply or a second press finds the run gone.
  */
 const endRun = async (
   $: Engine,
   run: number,
-  outcome: "brief" | "cancel" | "failed",
+  outcome: "brief" | "cancel" | "restore" | "failed",
   brief = "",
 ): Promise<void> => {
   if (run !== activeRun) {
@@ -286,7 +312,15 @@ const endRun = async (
     return;
   }
 
-  if (await fillBox($, text, outcome === "brief")) {
+  if (outcome === "cancel" && (await sendOriginal($, text))) {
+    return;
+  }
+
+  // A brief, or an original whose send was refused, carries the marker:
+  // pressing Enter then sends it unchanged instead of shaping it again.
+  const isMarked = outcome === "brief" || outcome === "cancel";
+
+  if (await fillBox($, text, isMarked)) {
     if (outcome === "brief") {
       $.ui.toast(TEXT_READY);
     } else if (outcome === "failed") {
@@ -300,7 +334,7 @@ const endRun = async (
   // Only while no new run started during the fill.
   if (activeRun === null) {
     // A brief keeps its marker here too, so copying and sending it passes.
-    heldText = outcome === "brief" ? withMarker(text) : text;
+    heldText = isMarked ? withMarker(text) : text;
     await safely(async () => {
       await update($, stepAtom, (step) => (step === "idle" ? "held" : step));
     });
@@ -544,7 +578,7 @@ const answerQuestion = async (
   }
 };
 
-/** Cancel at any step: the original goes back to the box. */
+/** Cancel at any step: the original is sent exactly as it was entered. */
 const cancel = async ($: Engine, run: number | null): Promise<void> => {
   if (run !== null && run === activeRun) {
     await endRun($, run, "cancel");
@@ -588,7 +622,8 @@ export const register: Register = (on, options) => {
       heldText = null;
 
       if (activeRun !== null) {
-        void safely(() => endRun($, activeRun ?? 0, "cancel"));
+        // Back to the box, never sent: the person just cleared the session.
+        void safely(() => endRun($, activeRun ?? 0, "restore"));
       }
     }
 
