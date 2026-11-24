@@ -1,0 +1,15 @@
+{
+  "name": "repo-fence",
+  "version": "0.1.0",
+  "description": "Asks before Claude changes files or works outside the session's repository",
+  "author": { "name": "MrRoco" },
+  "license": "MIT",
+  "userConfig": {
+    "allowedPaths": {
+      "type": "string",
+      "title": "Always allowed folders",
+      "description": "Comma-separated folders where changes never ask (absolute or ~/...)",
+      "default": ""
+    }
+  }
+}
