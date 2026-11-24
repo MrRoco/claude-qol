@@ -62,12 +62,14 @@ ok so I need something for the website, the client wants a contact form but also
 
 Expected:
 
-- [ ] The prompt is held; up to three questions show in the row. Answer one, skip one.
+- [ ] The prompt is held; up to three questions show in the row, without a field of their own.
+- [ ] Type an answer in the prompt box and press Enter: the chat shows
+      `prompt-shaper noted answer 1 of 3.`, the box is empty again, the next question shows.
+      Skip one.
 - [ ] A brief with `## Task`, `## Context`, `## Constraints`, `## Done when` lands in the prompt
       box, in the language of the prompt. It is not sent.
-- [ ] Focus stays in the answer field after Enter.
-- [ ] `>> what is 2+2` is sent at once, without the `>>`.
-- [ ] **Cancel** puts the original back in the prompt box.
+- [ ] While a question is open, `>> what is 2+2` is sent to Claude at once, without the `>>`.
+- [ ] **Cancel** sends the original to Claude as is.
 
 ## 4. privacy-mask
 

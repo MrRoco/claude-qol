@@ -18,6 +18,10 @@ const FAILED = "Could not shape the prompt; your text is back in the box.";
 const QUESTIONS_START =
   "You review a prompt someone wants to send to a coding assistant.";
 const BRIEF_START = "Rewrite the prompt into a brief for a coding assistant";
+const HINT =
+  "Answer in the prompt box and press Enter. Start with >> to send Claude a message instead.";
+const noted = (number: number, total: number) =>
+  ({ drop: `prompt-shaper noted answer ${number} of ${total}.` }) as const;
 
 const BAND = {
   plugin: "prompt-shaper",
@@ -118,6 +122,7 @@ const world = (on: On): World => {
   on("session.start", (_, e) => ({ cwd: e.cwd }));
   on("session.end", (_, e) => ({ sessionId: e.sessionId }));
   on("session.root", () => ({ value: ROOT }));
+  on("clock.sleep", () => ({ value: undefined }));
   on("ui.invalidate", () => ({ value: undefined }));
   on("ui.toast", (_, e) => {
     result.toasts.push(e.text);
@@ -323,28 +328,32 @@ test("three questions: answer, skip, answer; the brief gets two Q/A pairs", asyn
 
     await onBand($, surface, async (ui) => {
       const lead = await ui.find({ type: "Text", text: /◇/ });
-      expect(lead?.text).toBe("◇ Question 1 of 3: Which database?");
+      expect(lead?.text).toBe("◇ prompt-shaper · question 1 of 3");
       expect(lead?.props.color).toBe("claude");
-      const field = await ui.find({ type: "Input", key: "answer-0" });
-      expect(field?.props.rows).toBe(2);
-      expect(field?.props.autoFocus).toBe(true);
+      const question = await ui.find({ type: "Text", text: "Which database?" });
+      expect(question?.text).toBe("Which database?");
+      expect(question?.props.bold).toBe(true);
+      // No field of its own: the answer is typed in the prompt box.
+      expect(await ui.find({ type: "Input" })).toBeUndefined();
+      expect((await ui.find({ type: "Text", text: HINT }))?.text).toBe(HINT);
       expect(await ui.find({ type: "Button", key: "skip" })).toBeDefined();
       expect(await ui.find({ type: "Button", key: "skip-all" })).toBeDefined();
       expect(await ui.find({ type: "Button", key: "cancel" })).toBeDefined();
-      await ui.input({ key: "answer-0", text: "Postgres " });
     });
+    expect(await submit($, "Postgres ")).toEqual(noted(1, 3));
 
     expect(await rowText($, surface)).toBe(
-      "◇ Question 2 of 3: Which delimiter?",
+      "◇ prompt-shaper · question 2 of 3",
     );
     await onBand($, surface, async (ui) => {
       await ui.press({ key: "skip" });
     });
 
-    expect(await rowText($, surface)).toBe("◇ Question 3 of 3: Who runs it?");
-    await onBand($, surface, async (ui) => {
-      await ui.input({ key: "answer-2", text: "A nightly job" });
-    });
+    expect(await rowText($, surface)).toBe("◇ prompt-shaper · question 3 of 3");
+    // Typed while a turn runs: still the answer.
+    expect(await submit($, "A nightly job", { turnId: "t1" })).toEqual(
+      noted(3, 3),
+    );
     await settle();
 
     expect(engine.requests.length).toBe(2);
@@ -358,6 +367,8 @@ test("three questions: answer, skip, answer; the brief gets two Q/A pairs", asyn
     );
     expect(engine.filled).toEqual([{ text: MARKED, mode: "replace" }]);
     expect(engine.toasts).toEqual([READY]);
+    // Nothing reached the chat: the answers were the mod's.
+    expect(engine.entered).toEqual([]);
     expect(await isRowEmpty($, surface)).toBe(true);
   }
 });
@@ -383,6 +394,63 @@ test("Skip all goes straight to writing with no answers", async ($, on) => {
   expect(engine.requests[1]?.prompt).toBe(LONG);
   await engine.release();
   expect(engine.filled).toEqual([{ text: MARKED, mode: "replace" }]);
+});
+
+test("while asking, >> prompts, slash commands and images go to Claude", async ($, on) => {
+  const engine = world(on);
+  engine.replies.push('{"questions": ["One?"]}');
+  await catchLong($);
+
+  expect((await submit($, ">> what time is it")).text).toBe("what time is it");
+  const slash = { command: { name: "review", args: "x" } };
+  expect((await submit($, "/review x", slash)).text).toBe("/review x");
+  const image = { attachments: [{ type: "image", mediaType: "image/png" }] };
+  expect((await submit($, "see this", image)).text).toBe("see this");
+  expect(
+    (await submit($, "done", { origin: { kind: "task-notification" } })).text,
+  ).toBe("done");
+
+  // The question is still open.
+  expect(await rowText($, "terminal")).toBe("◇ prompt-shaper · question 1 of 1");
+  expect(engine.requests.length).toBe(1);
+});
+
+test("the box is emptied of a caught prompt and of an answer", async ($, on) => {
+  const engine = world(on);
+  engine.replies.push('{"questions": ["One?", "Two?"]}');
+  // The box keeps the prompt after the drop, as a live session does.
+  engine.box = LONG;
+  await catchLong($);
+  expect(engine.filled).toEqual([{ text: "", mode: "replace" }]);
+
+  engine.filled.length = 0;
+  engine.box = "Brevo";
+  expect(await submit($, "Brevo")).toEqual(noted(1, 2));
+  await settle();
+  expect(engine.filled).toEqual([{ text: "", mode: "replace" }]);
+});
+
+test("the box is left alone when it holds other text", async ($, on) => {
+  const engine = world(on);
+  engine.isHolding = true;
+  engine.box = "something new";
+  await catchLong($);
+  expect(engine.filled).toEqual([]);
+});
+
+test("while reading or writing, a typed prompt goes to Claude", async ($, on) => {
+  const engine = world(on);
+  engine.isHolding = true;
+  engine.replies.push('{"questions": []}', BRIEF);
+  await catchLong($);
+
+  expect((await submit($, "quick question")).text).toBe("quick question");
+  await engine.release();
+  expect(await rowText($, "terminal")).toBe(
+    "◇ prompt-shaper · writing the brief…",
+  );
+  expect((await submit($, "another one")).text).toBe("another one");
+  expect(engine.entered).toEqual(["quick question", "another one"]);
 });
 
 test("no questions goes straight to writing", async ($, on) => {
@@ -416,9 +484,9 @@ test("bad JSON: no questions, or the first three strings found", async ($, on) =
     ['{"questions": "none"}', undefined],
     [
       'Here: {"questions": ["A?", "B?", "C?", "D?"]} done',
-      "◇ Question 1 of 3: A?",
+      "◇ prompt-shaper · question 1 of 3",
     ],
-    ['{"questions": ["Which one?", "Why', "◇ Question 1 of 1: Which one?"],
+    ['{"questions": ["Which one?", "Why', "◇ prompt-shaper · question 1 of 1"],
   ];
 
   for (const [reply, row] of rounds) {
@@ -722,14 +790,15 @@ test("a state write failing while asking ends the run and puts the original back
     engine.toasts.length = 0;
     engine.replies.push('{"questions": ["One?", "Two?"]}');
     await catchLong($);
-    expect(await rowText($, surface)).toBe("◇ Question 1 of 2: One?");
+    expect(await rowText($, surface)).toBe("◇ prompt-shaper · question 1 of 2");
 
     isBroken = true;
-    await onBand($, surface, async (ui) => {
-      await ui.input({ key: "answer-0", text: "yes" });
-    });
+    engine.entered.length = 0;
+    // The answer is not eaten: it goes on to Claude.
+    expect((await submit($, "yes")).text).toBe("yes");
     await settle();
     isBroken = false;
+    expect(engine.entered).toEqual(["yes"]);
 
     expect(engine.filled).toEqual([{ text: LONG, mode: "replace" }]);
     expect(engine.toasts).toEqual([FAILED]);

@@ -20,6 +20,9 @@ const MAX_QUESTIONS = 3;
 // Keeps one odd question from filling the row; a real question is far shorter.
 const MAX_QUESTION_LENGTH = 300;
 const SEND_AS_IS = ">>";
+// The box keeps a dropped prompt; it is emptied once it shows up there.
+const CLEAR_TRIES = 20;
+const CLEAR_STEP_MS = 50;
 
 // Theme keys only, never fixed colours: `claude` is the theme's accent.
 const ACCENT = "claude";
@@ -44,6 +47,10 @@ const TEXT_READY = "Brief ready in the prompt box. Edit and send it.";
 const TEXT_FAILED = "Could not shape the prompt; your text is back in the box.";
 const TEXT_READING = "◇ prompt-shaper · reading your prompt…";
 const TEXT_WRITING = "◇ prompt-shaper · writing the brief…";
+const TEXT_ANSWER_HINT =
+  "Answer in the prompt box and press Enter. Start with >> to send Claude a message instead.";
+const answerNoted = (number: number, total: number): string =>
+  `prompt-shaper noted answer ${number} of ${total}.`;
 const TEXT_HELD =
   "◇ prompt-shaper · the prompt box did not take this text; copy it from here:";
 const TEXT_LOST = "◇ prompt-shaper · this run was lost in a reload.";
@@ -258,6 +265,31 @@ const fillBox = async (
     return result.isFilled;
   } catch {
     return false;
+  }
+};
+
+/**
+ * Empties the prompt box of a prompt the guard just dropped, so the person
+ * can type an answer at once. The engine puts the text back after the hook
+ * answered, so this waits for it to show up. Leaves the box alone as soon as
+ * it holds anything else: that is the person's own typing.
+ */
+const clearDropped = async ($: Engine, dropped: string): Promise<void> => {
+  const target = dropped.trim();
+
+  for (let i = 0; i < CLEAR_TRIES; i += 1) {
+    await $.clock.sleep(CLEAR_STEP_MS);
+    const draft = (await $.prompt.read()).text.trim();
+
+    if (draft === target) {
+      await $.prompt.fill({ text: "", mode: "replace" });
+
+      return;
+    }
+
+    if (draft !== "") {
+      return;
+    }
   }
 };
 
@@ -533,11 +565,63 @@ const orFail = async (
   }
 };
 
+type Recorded = { number: number; total: number; isLast: boolean };
+
 /**
- * Records the answer (null when skipped) to the question drawn at `drawn`,
- * once: the index moves on in one synchronous update. `isSkipAll` skips that
- * question and every one after it.
+ * Records the answer (null when skipped) to the open question of `run`, once:
+ * the index moves on in one synchronous update. `drawn` is the question a
+ * button was drawn for; null takes whichever is open (an answer typed in the
+ * prompt box). `isSkipAll` skips that question and every one after it.
+ * Which question was answered, or null when none of `run` was open.
  */
+const recordAnswer = async (
+  $: Engine,
+  run: number,
+  drawn: number | null,
+  answer: string | null,
+  isSkipAll = false,
+): Promise<Recorded | null> => {
+  const questions = await read($, questionsAtom);
+  // -1 while no question was taken; set inside the updater, which may rerun.
+  let taken = -1;
+  await update($, indexAtom, (index) => {
+    const isOpen =
+      run === activeRun &&
+      index < questions.length &&
+      (drawn === null || index === drawn);
+    taken = isOpen ? index : -1;
+
+    if (!isOpen) {
+      return index;
+    }
+
+    return isSkipAll ? questions.length : index + 1;
+  });
+
+  if (taken === -1) {
+    return null;
+  }
+
+  const at = taken;
+  await update($, answersAtom, (answers) => {
+    const next = [...answers];
+    next[at] = answer;
+
+    for (let i = at + 1; isSkipAll && i < questions.length; i += 1) {
+      next[i] = null;
+    }
+
+    return next;
+  });
+
+  return {
+    number: at + 1,
+    total: questions.length,
+    isLast: isSkipAll || at + 1 >= questions.length,
+  };
+};
+
+/** A button's answer: records it, then writes once the last one is in. */
 const answerQuestion = async (
   $: Engine,
   settings: Settings,
@@ -546,34 +630,9 @@ const answerQuestion = async (
   answer: string | null,
   isSkipAll = false,
 ): Promise<void> => {
-  const questions = await read($, questionsAtom);
-  let isTaken = false;
-  await update($, indexAtom, (index) => {
-    isTaken = run === activeRun && index === drawn;
+  const recorded = await recordAnswer($, run, drawn, answer, isSkipAll);
 
-    if (!isTaken) {
-      return index;
-    }
-
-    return isSkipAll ? questions.length : index + 1;
-  });
-
-  if (!isTaken) {
-    return;
-  }
-
-  await update($, answersAtom, (answers) => {
-    const next = [...answers];
-    next[drawn] = answer;
-
-    for (let i = drawn + 1; isSkipAll && i < questions.length; i += 1) {
-      next[i] = null;
-    }
-
-    return next;
-  });
-
-  if (isSkipAll || drawn + 1 >= questions.length) {
+  if (recorded?.isLast === true) {
     await toWriting($, settings, run);
   }
 };
@@ -631,7 +690,7 @@ export const register: Register = (on, options) => {
   });
 
   // The guard: the only hook that changes an event, by dropping a caught
-  // prompt or removing the `>>` marker.
+  // prompt or an answer, or removing the `>>` marker.
   on("prompt.submit", async ($, e, next) => {
     const isTyped =
       e.origin.kind === "composer" &&
@@ -640,6 +699,39 @@ export const register: Register = (on, options) => {
 
     if (isTyped && e.text.startsWith(SEND_AS_IS)) {
       return next({ ...e, text: stripMarker(e.text) });
+    }
+
+    // While a question is open, a prompt typed in the box is its answer,
+    // also when typed while a turn runs. One with images passes on.
+    const answerRun = activeRun;
+    const answer = e.text.trim();
+
+    if (
+      isTyped &&
+      answerRun !== null &&
+      answer !== "" &&
+      (e.attachments === undefined || e.attachments.length === 0)
+    ) {
+      let recorded: Recorded | null;
+
+      try {
+        recorded = await recordAnswer($, answerRun, null, answer);
+      } catch (error) {
+        // The answer is half recorded: the run ends and the original goes
+        // back to the box; the `.catch` below sends this prompt on.
+        void safely(() => endRun($, answerRun, "failed"));
+        throw error;
+      }
+
+      if (recorded !== null) {
+        if (recorded.isLast) {
+          void orFail($, answerRun, () => toWriting($, settings, answerRun));
+        }
+
+        void safely(() => clearDropped($, e.text));
+
+        return { drop: answerNoted(recorded.number, recorded.total) };
+      }
     }
 
     const isCandidate =
@@ -657,6 +749,8 @@ export const register: Register = (on, options) => {
     if (!(await startRun($, settings, e.text))) {
       return next(e);
     }
+
+    void safely(() => clearDropped($, e.text));
 
     return { drop: TEXT_DROP };
   }).catch(($, e, next) => {
@@ -695,7 +789,7 @@ export const register: Register = (on, options) => {
       return next(e);
     }
 
-    const { Box, Button, Input, Text } = $.ui.resolve(e);
+    const { Box, Button, Text } = $.ui.resolve(e);
     const columns = e.props.bodyColumns;
     // The run this drawing belongs to: a press acts on it alone.
     const run = activeRun;
@@ -752,31 +846,24 @@ export const register: Register = (on, options) => {
 
       if (question !== undefined) {
         return (
-          <Box flexDirection="column" width={columns}>
+          // Framed in the accent, the question bold on its own line: it is
+          // waiting on the person, so it has to stand out from other rows.
+          <Box
+            flexDirection="column"
+            width={columns}
+            borderStyle="round"
+            borderColor={ACCENT}
+            paddingX={1}
+          >
             <Text color={ACCENT}>
-              {`◇ Question ${index + 1} of ${questions.length}: ${question}`}
+              {`◇ prompt-shaper · question ${index + 1} of ${questions.length}`}
             </Text>
-            {/* Keyed per question, so each one starts with an empty field. */}
-            <Input
-              key={`answer-${index}`}
-              rows={2}
-              autoFocus
-              value=""
-              placeholder="Your answer"
-              submitLabel="answer"
-              onSubmit={(value) => {
-                const answer = value.trim();
-                void orFail($, run, () =>
-                  answerQuestion(
-                    $,
-                    settings,
-                    run,
-                    index,
-                    answer === "" ? null : answer,
-                  ),
-                );
-              }}
-            />
+            <Text bold>
+              {question}
+            </Text>
+            <Text dimColor wrap="truncate-end">
+              {TEXT_ANSWER_HINT}
+            </Text>
             <Box flexDirection="row">
               {button(
                 "skip",

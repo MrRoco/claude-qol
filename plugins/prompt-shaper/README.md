@@ -7,8 +7,11 @@ Turns a long, loose prompt into a clear brief before it reaches Claude.
 prompt…`.
 - **A few questions.** A small side request, separate from the chat, reads the prompt and looks
   for at most three things that are missing, unclear or contradict each other. Each question
-  shows in the row with a text field: type an answer and press Enter, or use **Skip** or
-  **Skip all**. If nothing important is missing, there are no questions.
+  shows in the row. Answer it in the normal prompt box and press Enter: the answer stays with
+  prompt-shaper (the chat shows `prompt-shaper noted answer 1 of 3.`) and the next question
+  follows. Use **Skip** for one question or **Skip all** for the rest. If nothing important is
+  missing, there are no questions. While a question is open, start a prompt with `>>` to send
+  Claude a message instead; slash commands and prompts with images pass as usual.
 - **A brief in the prompt box.** A second side request rewrites the prompt into a brief with
   the sections `## Task`, `## Context`, `## Constraints` and `## Done when`, in the language you
   wrote in, using your answers. It lands in the prompt box for you to read, edit and send
@@ -71,5 +74,6 @@ and show in `/usage` as mod model calls.
 
 - Reloading the mod while a prompt is being shaped loses that run: the row then says so and
   offers **Close**. Your prompt may need to be typed again.
-- Whether the prompt box keeps your text by itself after the prompt is held depends on Claude
-  Code; if it does, the brief is added below your original rather than replacing it.
+- Claude Code keeps a held prompt (or an answer) in the prompt box. prompt-shaper empties the
+  box once the text shows up there, within about a second, so you can type the answer. If you
+  start typing before that, your text is left alone.
