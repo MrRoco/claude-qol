@@ -11,8 +11,9 @@ another folder in the shell, you are asked first.
 - **Reading is free.** Only changes are asked: `Edit`, `Write`, `NotebookEdit`, and shell
   commands that write or work elsewhere. `Read`, `Grep`, `Glob` and read-only commands such as
   `cat`, `ls`, `grep` or `git log` never ask.
-- **Claude's own places never ask.** Anything under a `.claude` folder, `/tmp`, `/private/tmp`,
-  `/var/folders` (scratchpads and temp files) and `/dev` (such as `2>/dev/null`).
+- **Claude's own places never ask.** Your home's `~/.claude` folder and the repository's own
+  `.claude` folder, `/tmp`, `/private/tmp`, `/var/folders`, `/private/var/folders` (scratchpads
+  and temp files) and `/dev` (such as `2>/dev/null`).
 - **One question per folder.** Calls for the same folder that arrive while a question is open
   wait for that answer instead of opening a second dialog.
 
@@ -38,12 +39,15 @@ claude plugin install repo-fence@qol
 A command is split into parts on `&&`, `||`, `;`, `|`, `&` and new lines (not inside quotes or
 `$( … )`); heredoc bodies are skipped. A part asks when:
 
-- it is `cd <dir>`, `pushd <dir>` or `git -C <dir> …` with `<dir>` outside;
+- it is `cd <dir>`, `pushd <dir>` or `git -C <dir> …` (also `git -C<dir>`) with `<dir>` outside;
 - it writes with `>` or `>>` to a path outside, whatever the command;
 - its command is not read-only and it names an absolute or `~/` path outside (also as
-  `--option=/path`). Read-only: `ls`, `cat`, `head`, `tail`, `less`, `grep`, `rg`, `find`, `wc`,
-  `stat`, `file`, `diff`, `tree`, `du`, `echo`, `printf`, `which`, and `git log`, `show`, `diff`,
-  `status`, `blame`.
+  `--option=/path`, `key=/path` such as `dd of=/path`, or attached as `-o/path`). Read-only:
+  `ls`, `cat`, `head`, `tail`, `less`, `grep`, `rg`, `find`, `wc`, `stat`, `file`, `diff`,
+  `tree`, `du`, `echo`, `printf`, `which`, `source`, `.`, `test`, `[`, `realpath`, `readlink`,
+  `jq`, `sort`, `sed`, and `git log`, `show`, `diff`, `status`, `blame`. Not read-only after
+  all: `find` with `-delete`, `-exec`, `-execdir`, `-ok` or `-okdir`; `sed` with `-i` or
+  `--in-place`; `sort` with `-o` or `--output`.
 
 ## Settings
 
@@ -68,5 +72,8 @@ In Claude Code's config menu, or under `pluginConfigs` for `repo-fence` in your 
 
 This is a guard against mistakes, not a sandbox. A command can still reach other folders in
 ways the check does not see: a script that writes elsewhere, a path in a variable (`$HOME/x`),
-a relative path in a command other than `cd` or `pushd`, a command inside `$( … )`, or an MCP
-tool that writes files.
+a relative path in a command other than `cd` or `pushd`, a command inside `$( … )` or inside
+backticks, `cd ~user`, a bare `cd` (to the home folder), or an MCP tool that writes files.
+
+The `.claude` folders of other projects are not always allowed: a change there asks like any
+other outside change.

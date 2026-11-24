@@ -7,13 +7,23 @@ const ANSWER_DENY = "Deny";
 const TEXT_FAILED = "repo-fence could not check this change; it was refused.";
 // Stands in for a path or root the failed check never got to know.
 const UNKNOWN = "unknown";
+// Stands in for the path of a Bash command whose check failed.
+const A_PATH = "a path";
 
 // Folders Claude Code and the system use for scratch work; never asked.
-const TEMP_FOLDERS = ["/tmp", "/private/tmp", "/var/folders"];
+// `/private/var/folders` is the real macOS path behind `/var/folders`.
+const TEMP_FOLDERS = [
+  "/tmp",
+  "/private/tmp",
+  "/var/folders",
+  "/private/var/folders",
+];
 // Device files such as /dev/null are a redirect target in many commands and
 // change no project, so they never ask either.
 const DEVICE_FOLDER = "/dev";
-const CLAUDE_FOLDER = "/.claude/";
+// Claude's own folder, allowed under the home folder and the root only: the
+// `.claude` folder of another project is that project's business.
+const CLAUDE_FOLDER = ".claude";
 
 // Commands that only read: their path arguments never ask.
 const READ_ONLY_COMMANDS = new Set([
@@ -34,8 +44,19 @@ const READ_ONLY_COMMANDS = new Set([
   "echo",
   "printf",
   "which",
+  "source",
+  ".",
+  "test",
+  "[",
+  "realpath",
+  "readlink",
+  "jq",
+  "sort",
+  "sed",
 ]);
 const READ_ONLY_GIT = new Set(["log", "show", "diff", "status", "blame"]);
+// `find` actions that change or run something: with one, `find` is no reader.
+const FIND_ACTIONS = new Set(["-delete", "-exec", "-execdir", "-ok", "-okdir"]);
 // Shell keywords that may lead a segment before its real command.
 const LEADING_KEYWORDS = new Set([
   "if",
@@ -128,8 +149,8 @@ const isWithin = (path: string, folder: string): boolean =>
 /** Whether a change at this absolute path needs no question. */
 const isAllowed = (path: string, context: Context): boolean =>
   isWithin(path, context.root) ||
-  path.includes(CLAUDE_FOLDER) ||
-  path.endsWith("/.claude") ||
+  (context.home !== null &&
+    isWithin(path, `${context.home}/${CLAUDE_FOLDER}`)) ||
   TEMP_FOLDERS.some((folder) => isWithin(path, folder)) ||
   isWithin(path, DEVICE_FOLDER) ||
   context.allowedFolders.some((folder) => isWithin(path, folder)) ||
@@ -506,6 +527,56 @@ const splitWords = (segment: string): Word[] => {
 const isPathWord = (text: string): boolean =>
   text.startsWith("/") || text === "~" || text.startsWith("~/");
 
+/**
+ * The path a command word names, if any: the word itself, after the `=` of
+ * `--prefix=/x` or `of=/x`, or attached to a short option (`-o/x`). A `-C`
+ * option names the folder a command works in.
+ */
+const pathOf = (
+  text: string,
+): { path: string; isDirectory: boolean } | null => {
+  const attached = /^-([A-Za-z])(.+)$/.exec(text);
+  const assigned = /^(?:--?)?[A-Za-z_][\w.-]*=(.*)$/.exec(text);
+  const value =
+    assigned !== null
+      ? (assigned[1] ?? "")
+      : attached !== null
+        ? (attached[2] ?? "")
+        : text;
+
+  if (!isPathWord(value)) {
+    return null;
+  }
+
+  return { path: value, isDirectory: attached?.[1] === "C" };
+};
+
+/**
+ * Whether a read-only command writes after all: `find` with an action that
+ * changes or runs something, `sed -i`, `sort -o`.
+ */
+const writesAnyway = (first: string, rest: readonly Word[]): boolean => {
+  const options = rest.slice(1).map((word) => word.text);
+
+  switch (first) {
+    case "find":
+      return options.some((option) => FIND_ACTIONS.has(option));
+    case "sed":
+      // `-i`, `-i.bak`, or `i` in a cluster such as `-ni`.
+      return options.some(
+        (option) =>
+          /^-[A-Za-z]*i/.test(option) || option.startsWith("--in-place"),
+      );
+    case "sort":
+      return options.some(
+        (option) =>
+          /^-[A-Za-z]*o/.test(option) || option.startsWith("--output"),
+      );
+    default:
+      return false;
+  }
+};
+
 const baseName = (word: string): string =>
   word.slice(word.lastIndexOf("/") + 1);
 
@@ -518,6 +589,13 @@ const readGit = (
 
   for (let i = 1; i < words.length; i += 1) {
     const text = words[i]?.text ?? "";
+
+    // `-C/elsewhere`: the folder attached to the option.
+    if (text.startsWith("-C") && text.length > 2) {
+      dirs.push(text.slice(2));
+      dirIndexes.add(i);
+      continue;
+    }
 
     if (text === "-C" || text === "-c") {
       const value = words[i + 1]?.text;
@@ -577,7 +655,8 @@ const segmentTargets = (segment: string, context: Context): Target[] => {
   }
 
   let skipped = new Set<number>();
-  let isReadOnly = READ_ONLY_COMMANDS.has(first);
+  let isReadOnly =
+    READ_ONLY_COMMANDS.has(first) && !writesAnyway(first, rest);
 
   if (first === "git") {
     const git = readGit(rest);
@@ -600,17 +679,10 @@ const segmentTargets = (segment: string, context: Context): Target[] => {
       return;
     }
 
-    // `--prefix=/elsewhere` names a path after the `=`.
-    const value = word.text.startsWith("-")
-      ? word.text.slice(word.text.indexOf("=") + 1)
-      : word.text;
+    const value = pathOf(word.text);
 
-    if (word.text.startsWith("-") && !word.text.includes("=")) {
-      return;
-    }
-
-    if (isPathWord(value)) {
-      add(targetFor(value, false, context));
+    if (value !== null) {
+      add(targetFor(value.path, value.isDirectory, context));
     }
   });
 
@@ -705,9 +777,16 @@ const callTargets = (
       );
 };
 
-/** The path a refused call names, for the deny text when the check failed. */
+/**
+ * The path a refused call names, for the deny text when the check failed. A
+ * Bash command is not a path: it is named `a path`.
+ */
 const writtenPath = (e: { [key: string]: unknown }): string => {
-  for (const field of ["file_path", "notebook_path", "command"]) {
+  if (e.tool === "Bash") {
+    return A_PATH;
+  }
+
+  for (const field of ["file_path", "notebook_path"]) {
     const value = e[field];
 
     if (typeof value === "string") {
