@@ -72,3 +72,4 @@ scripts/check.sh                       # validate the marketplace and every mod,
 ## Rules from corrections
 
 - When adding or changing plugins, update the test-case markdown with tests for each new plugin. (added 24-11-2026)
+- Leave the workspace as clean as possible: remove temporary worktrees and branches you created once their work is merged. (added 24-11-2026)
