@@ -66,3 +66,7 @@ scripts/check.sh                       # validate the marketplace and every mod,
 - `.plan/phase12-contract.md` — repo-fence
 - `.plan/phase13-contract.md` — project-badge
 - `.plan/phase11-contract.md` — commit-clean
+
+## Rules from corrections
+
+- When adding or changing plugins, update the test-case markdown with tests for each new plugin. (added 24-11-2026)
