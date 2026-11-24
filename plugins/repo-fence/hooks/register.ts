@@ -53,8 +53,41 @@ const READ_ONLY_COMMANDS = new Set([
   "sed",
 ]);
 const READ_ONLY_GIT = new Set(["log", "show", "diff", "status", "blame"]);
-// `find` actions that change or run something: with one, `find` is no reader.
-const FIND_ACTIONS = new Set(["-delete", "-exec", "-execdir", "-ok", "-okdir"]);
+// `find` actions that change, write or run something: with one, `find` is no
+// reader.
+const FIND_ACTIONS = new Set([
+  "-delete",
+  "-exec",
+  "-execdir",
+  "-ok",
+  "-okdir",
+  "-fprint",
+  "-fprint0",
+  "-fprintf",
+  "-fls",
+]);
+// `sort` options known to only read. Anything else (`-o`, `--output`, `-T`,
+// `--compress-program`, an abbreviation such as `--ou`) may write or run.
+const SORT_FLAGS = "bdfgiMhnRrVuszcC";
+const SORT_VALUE_FLAGS = "ktS";
+const SORT_LONG_FLAGS = new Set([
+  "--ignore-leading-blanks",
+  "--dictionary-order",
+  "--ignore-case",
+  "--general-numeric-sort",
+  "--ignore-nonprinting",
+  "--month-sort",
+  "--human-numeric-sort",
+  "--numeric-sort",
+  "--random-sort",
+  "--reverse",
+  "--version-sort",
+  "--unique",
+  "--stable",
+  "--zero-terminated",
+  "--check",
+]);
+const SORT_LONG_VALUES = ["--key=", "--field-separator=", "--buffer-size="];
 // Shell keywords that may lead a segment before its real command.
 const LEADING_KEYWORDS = new Set([
   "if",
@@ -533,7 +566,8 @@ const isPathWord = (text: string): boolean =>
 const pathOf = (
   text: string,
 ): { path: string; isDirectory: boolean } | null => {
-  const attached = /^-([A-Za-z])(.+)$/.exec(text);
+  // Also after a cluster of flags, as in `sort -no/x`.
+  const attached = /^-([A-Za-z]+)(\/.*|~\/.*|~)$/.exec(text);
   const assigned = /^(?:--?)?[A-Za-z_][\w.-]*=(.*)$/.exec(text);
   const value =
     assigned !== null
@@ -546,7 +580,7 @@ const pathOf = (
     return null;
   }
 
-  return { path: value, isDirectory: attached?.[1] === "C" };
+  return { path: value, isDirectory: attached?.[1]?.endsWith("C") === true };
 };
 
 // A sed address: a line number, `$` or `/regex/`.
@@ -596,6 +630,56 @@ const isSedPrintOnly = (args: readonly string[]): boolean => {
 };
 
 /**
+ * Whether a sort call only reads: every option is in the known-safe set, the
+ * value options (`-k`, `-t`, `-S`) with their value attached or next.
+ */
+const isSortReadOnly = (args: readonly string[]): boolean => {
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i] ?? "";
+
+    if (arg === "--") {
+      return true;
+    }
+
+    if (arg === "-" || !arg.startsWith("-")) {
+      continue;
+    }
+
+    if (arg.startsWith("--")) {
+      const isSafe =
+        SORT_LONG_FLAGS.has(arg) ||
+        SORT_LONG_VALUES.some((prefix) => arg.startsWith(prefix));
+
+      if (!isSafe) {
+        return false;
+      }
+
+      continue;
+    }
+
+    // A short cluster such as `-nr` or `-rk2`: a value flag takes the rest
+    // of the cluster, or the next word when nothing is attached.
+    for (let k = 1; k < arg.length; k += 1) {
+      const flag = arg[k] ?? "";
+
+      if (SORT_VALUE_FLAGS.includes(flag)) {
+        if (k === arg.length - 1) {
+          i += 1;
+        }
+
+        break;
+      }
+
+      if (!SORT_FLAGS.includes(flag)) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+};
+
+/**
  * Files a sed script writes with `w`/`W` (also `s///w`), as in `1w/x` or
  * `s/a/b/w /x/y`. Loose on purpose: a false match only asks once too often.
  */
@@ -608,7 +692,8 @@ const sedWritePaths = (script: string): string[] =>
 
 /**
  * Whether a read-only command writes after all: `find` with an action that
- * changes or runs something, sed beyond a plain print, `sort -o`.
+ * changes or runs something, sed beyond a plain print, `sort` with an
+ * option not known to only read, `tree -o`.
  */
 const writesAnyway = (first: string, rest: readonly Word[]): boolean => {
   const options = rest.slice(1).map((word) => word.text);
@@ -619,9 +704,14 @@ const writesAnyway = (first: string, rest: readonly Word[]): boolean => {
     case "sed":
       return !isSedPrintOnly(options);
     case "sort":
+      return !isSortReadOnly(options);
+    case "tree":
+      // `-o file`, also in a cluster, or `--output` and any abbreviation.
       return options.some(
         (option) =>
-          /^-[A-Za-z]*o/.test(option) || option.startsWith("--output"),
+          /^-[A-Za-z]*o/.test(option) ||
+          (option.startsWith("--o") &&
+            "--output".startsWith(option.split("=")[0] ?? "")),
       );
     default:
       return false;
@@ -634,9 +724,16 @@ const baseName = (word: string): string =>
 /** Where `git` would run, from each `-C <dir>`; and its subcommand. */
 const readGit = (
   words: readonly Word[],
-): { dirs: string[]; dirIndexes: Set<number>; subcommand: string | null } => {
+): {
+  dirs: string[];
+  dirIndexes: Set<number>;
+  subcommand: string | null;
+  hasConfig: boolean;
+} => {
   const dirs: string[] = [];
   const dirIndexes = new Set<number>();
+  // `-c` or `--config-env` can point git at a pager or tool that runs.
+  let hasConfig = false;
 
   for (let i = 1; i < words.length; i += 1) {
     const text = words[i]?.text ?? "";
@@ -645,6 +742,16 @@ const readGit = (
     if (text.startsWith("-C") && text.length > 2) {
       dirs.push(text.slice(2));
       dirIndexes.add(i);
+      continue;
+    }
+
+    if (text.startsWith("-c") || text.startsWith("--config-env")) {
+      hasConfig = true;
+    }
+
+    // `--config-env=…` carries its value; `--config-env …` takes the next word.
+    if (text === "--config-env") {
+      i += 1;
       continue;
     }
 
@@ -661,11 +768,11 @@ const readGit = (
     }
 
     if (!text.startsWith("-")) {
-      return { dirs, dirIndexes, subcommand: text };
+      return { dirs, dirIndexes, subcommand: text, hasConfig };
     }
   }
 
-  return { dirs, dirIndexes, subcommand: null };
+  return { dirs, dirIndexes, subcommand: null, hasConfig };
 };
 
 /** The places one shell segment would change outside the repository. */
@@ -717,7 +824,12 @@ const segmentTargets = (segment: string, context: Context): Target[] => {
     }
 
     skipped = git.dirIndexes;
-    isReadOnly = git.subcommand !== null && READ_ONLY_GIT.has(git.subcommand);
+    // `--output=<file>` writes even from `git diff` or `git log`.
+    isReadOnly =
+      git.subcommand !== null &&
+      READ_ONLY_GIT.has(git.subcommand) &&
+      !git.hasConfig &&
+      !rest.some((word) => word.text.startsWith("--output"));
   }
 
   if (isReadOnly) {

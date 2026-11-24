@@ -46,10 +46,12 @@ A command is split into parts on `&&`, `||`, `;`, `|`, `&` and new lines (not in
   `ls`, `cat`, `head`, `tail`, `less`, `grep`, `rg`, `find`, `wc`, `stat`, `file`, `diff`,
   `tree`, `du`, `echo`, `printf`, `which`, `test`, `[`, `realpath`, `readlink`, `jq`, `sort`,
   `sed -n` with a plain print script (`1p`, `10,20p`, `/re/p`), and `git log`, `show`, `diff`,
-  `status`, `blame`. Not read-only after all: `find` with `-delete`, `-exec`, `-execdir`, `-ok`
-  or `-okdir`; `sort` with `-o` or `--output`; any other `sed` (such as `-i`, `-f` or a script
-  with `s`, `w` or `e`), where a file named after `w` in the script is checked too. `source`
-  and `.` run a script, so a script outside asks.
+  `status`, `blame`. Not read-only after all: `find` with `-delete`, `-exec`, `-execdir`, `-ok`,
+  `-okdir`, `-fprint`, `-fprint0`, `-fprintf` or `-fls`; `sort` with any option outside a
+  known-safe set (such as `-o`, `--output`, `-T` or `--compress-program`); `tree` with `-o` or
+  `--output`; `git` with `--output…`, or with `-c` or `--config-env` before the subcommand; any
+  other `sed` (such as `-i`, `-f` or a script with `s`, `w` or `e`), where a file named after
+  `w` in the script is checked too. `source` and `.` run a script, so a script outside asks.
 
 ## Settings
 
