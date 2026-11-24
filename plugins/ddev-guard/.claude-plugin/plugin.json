@@ -1,6 +1,6 @@
 {
   "name": "ddev-guard",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Runs PHP, Composer and vendor/bin commands through ddev exec in DDEV projects",
   "author": { "name": "MrRoco" },
   "license": "MIT"

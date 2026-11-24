@@ -15,6 +15,10 @@ type Options = {
   root: string;
   isDdev: boolean;
   isExistsThrowing?: boolean;
+  // The shell's folder; the root when absent, a throw when "throw".
+  cwd?: string;
+  // What the tool beneath answers; a plain result when absent.
+  answer?: () => unknown;
 };
 
 // The detection cache lives per session root for the whole module, so each
@@ -31,6 +35,13 @@ const world = (on: On, options: Options): World => {
   const result: World = { ran: [], others: [] };
 
   on("session.root", () => ({ value: options.root }));
+  on("session.cwd", () => {
+    if (options.cwd === "throw") {
+      throw new Error("no folder");
+    }
+
+    return { value: options.cwd ?? options.root };
+  });
   on("fs.exists", (_, e) => {
     if (options.isExistsThrowing === true) {
       throw new Error("disk gone");
@@ -47,7 +58,9 @@ const world = (on: On, options: Options): World => {
       result.others.push({ tool: String(e.tool), command: (e as { command?: unknown }).command });
     }
 
-    return { result: { ok: true } };
+    return (options.answer?.() ?? { result: { ok: true } }) as {
+      result: unknown;
+    };
   });
 
   return result;
@@ -286,4 +299,143 @@ test("a throw inside the hook passes the original command", async ($, on) => {
 
   await expectUnchanged($, engine, "php -v");
   expect(engine.ran).toEqual(["php -v"]);
+});
+
+test("the shell's folder below the root sets --dir and combines with cd", async ($, on) => {
+  const root = freshRoot();
+  const engine = world(on, { root, isDdev: true, cwd: `${root}/web/` });
+
+  await expectRewrite(
+    $,
+    engine,
+    "php -v",
+    "ddev exec --dir /var/www/html/web php -v",
+  );
+  await expectRewrite(
+    $,
+    engine,
+    "cd app && composer install",
+    "cd app && ddev exec --dir /var/www/html/web/app composer install",
+  );
+});
+
+test("a folder outside the root passes unchanged", async ($, on) => {
+  const engine = world(on, { root: freshRoot(), isDdev: true, cwd: "/tmp" });
+
+  await expectUnchanged($, engine, "php -v");
+  expect(engine.ran).toEqual(["php -v"]);
+});
+
+test("a sibling folder that only shares the root's prefix passes unchanged", async ($, on) => {
+  const root = freshRoot();
+  const engine = world(on, { root, isDdev: true, cwd: `${root}-old/web` });
+
+  await expectUnchanged($, engine, "php -v");
+});
+
+test("a folder that would need quoting passes unchanged", async ($, on) => {
+  const root = freshRoot();
+  const engine = world(on, { root, isDdev: true, cwd: `${root}/my dir` });
+
+  await expectUnchanged($, engine, "php -v");
+});
+
+test("a folder that cannot be read passes unchanged", async ($, on) => {
+  const engine = world(on, { root: freshRoot(), isDdev: true, cwd: "throw" });
+
+  await expectUnchanged($, engine, "php -v");
+  expect(engine.ran).toEqual(["php -v"]);
+});
+
+test("quoted strings inside a quoted substitution are not rewritten", async ($, on) => {
+  const engine = ddevWorld(on);
+
+  for (const command of [
+    'echo "$(echo "a; php b")"',
+    'gh pr create --body "$(printf "Run: composer install; php artisan migrate")"',
+    'echo "${NAME:-"x; php y"}"',
+    'echo "`echo "a; php b"`"',
+  ]) {
+    await expectUnchanged($, engine, command);
+  }
+
+  await expectRewrite(
+    $,
+    engine,
+    `php -r "echo '$(date)';" && echo "$(echo "x; php y")"`,
+    `ddev exec php -r "echo '$(date)';" && echo "$(echo "x; php y")"`,
+  );
+});
+
+test("nothing after a # comment is rewritten", async ($, on) => {
+  const engine = ddevWorld(on);
+
+  await expectUnchanged($, engine, "echo hi # ; php x");
+  await expectUnchanged($, engine, "# php x\ncomposer install");
+  await expectRewrite(
+    $,
+    engine,
+    "php -v # check; composer install",
+    "ddev exec php -v # check; composer install",
+  );
+  await expectRewrite(
+    $,
+    engine,
+    "echo a#b; php -v",
+    "echo a#b; ddev exec php -v",
+  );
+});
+
+test("after an || the folder from a cd is unsure, so nothing further is rewritten", async ($, on) => {
+  const engine = ddevWorld(on);
+
+  await expectUnchanged($, engine, "cd web && false || php x");
+  await expectRewrite(
+    $,
+    engine,
+    "cd web && php x || php y",
+    "cd web && ddev exec --dir /var/www/html/web php x || php y",
+  );
+  await expectRewrite(
+    $,
+    engine,
+    "php x || php y",
+    "ddev exec php x || ddev exec php y",
+  );
+});
+
+test("a denied result gets no note", async ($, on) => {
+  const engine = world(on, {
+    root: freshRoot(),
+    isDdev: true,
+    answer: () => ({ deny: "not now" }),
+  });
+
+  const answer = await bash($, "php -v");
+
+  expect(engine.ran).toEqual(["ddev exec php -v"]);
+  expect(answer.deny).toBe("not now");
+  expect(answer.context).toBeUndefined();
+});
+
+test("a throw after next was called does not run the command twice", async ($, on) => {
+  // The engine checks a stub's answer, so the note step cannot be made to
+  // throw from here. Instead the tool beneath runs the rewritten command and
+  // then throws: the hook fails after `next` was called, and its `.catch`
+  // must not run anything again.
+  const engine = world(on, {
+    root: freshRoot(),
+    isDdev: true,
+    answer: () => {
+      throw new Error("tool broke after running");
+    },
+  });
+
+  try {
+    await bash($, "php -v");
+  } catch {
+    // The failure itself may surface; only the number of runs matters here.
+  }
+
+  expect(engine.ran).toEqual(["ddev exec php -v"]);
 });
