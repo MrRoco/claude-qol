@@ -290,6 +290,9 @@ test("read-only and inside Bash commands do not ask", async ($, on) => {
     `git log ${OTHER}`,
     `git show HEAD:${OTHER}/x`,
     `tree -L 2 ${OTHER}`,
+    `tree -R ${OTHER}`,
+    `rg --pre-glob '*.gz' foo ${OTHER}`,
+    `less -N ${OTHER}/x`,
     `realpath ${OTHER} && readlink ${OTHER}/link`,
     `find ${OTHER} -name "*.php"`,
   ];
@@ -413,6 +416,31 @@ test("write options of sort, find, git and tree ask", async ($, on) => {
     [`git --config-env=core.pager=X log ${OTHER}/f`, `${OTHER}/f`],
     [`tree -o ${OTHER}/x`, `${OTHER}/x`],
     [`tree --outp=${OTHER}/x`, `${OTHER}/x`],
+  ];
+
+  for (const [command, path] of cases) {
+    engine.answers.push("Deny");
+    expect(await bash($, command)).toEqual({ deny: denied(path) });
+  }
+
+  expect(engine.asked.length).toBe(cases.length);
+  expect(engine.ran).toEqual([]);
+});
+
+test("program and log options of rg, less, tree and git ask", async ($, on) => {
+  const engine = world(on);
+  const cases: [string, string][] = [
+    [`rg --pre ${OTHER}/x foo`, `${OTHER}/x`],
+    [`rg --pre=${OTHER}/x foo`, `${OTHER}/x`],
+    [`rg --hostname-bin ${OTHER}/x foo`, `${OTHER}/x`],
+    [`rg --hostname-bin=${OTHER}/x foo`, `${OTHER}/x`],
+    [`less -o ${OTHER}/log a.txt`, `${OTHER}/log`],
+    [`less -O${OTHER}/log a.txt`, `${OTHER}/log`],
+    [`less --log-file=${OTHER}/log a.txt`, `${OTHER}/log`],
+    [`less --LOG-FILE ${OTHER}/log a.txt`, `${OTHER}/log`],
+    [`tree -R -H . ${OTHER}/site`, `${OTHER}/site`],
+    [`tree -RH . ${OTHER}/site`, `${OTHER}/site`],
+    [`git --exec-path=${OTHER}/bin log`, `${OTHER}/bin`],
   ];
 
   for (const [command, path] of cases) {

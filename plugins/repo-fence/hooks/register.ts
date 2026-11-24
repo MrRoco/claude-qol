@@ -629,6 +629,12 @@ const isSedPrintOnly = (args: readonly string[]): boolean => {
   );
 };
 
+/** Whether a short flag is given, alone or in a cluster such as `-RH`. */
+const hasShortFlag = (options: readonly string[], flag: string): boolean =>
+  options.some(
+    (option) => /^-[A-Za-z]+$/.test(option) && option.includes(flag),
+  );
+
 /**
  * Whether a sort call only reads: every option is in the known-safe set, the
  * value options (`-k`, `-t`, `-S`) with their value attached or next.
@@ -711,8 +717,27 @@ const writesAnyway = (first: string, rest: readonly Word[]): boolean => {
         (option) =>
           /^-[A-Za-z]*o/.test(option) ||
           (option.startsWith("--o") &&
-            "--output".startsWith(option.split("=")[0] ?? "")),
+            "--output".startsWith(option.split("=")[0] ?? "")) ||
+          // `-R` with `-H` writes a 00Tree.html into each folder.
+          (hasShortFlag(options, "R") && hasShortFlag(options, "H")),
       );
+    case "rg":
+      // `--pre` and `--hostname-bin` run a program.
+      return options.some((option) =>
+        ["--pre", "--hostname-bin"].includes(option.split("=")[0] ?? ""),
+      );
+    case "less":
+      // `-o`/`-O` (also in a cluster) and `--log-file`/`--LOG-FILE`, also
+      // abbreviated, copy the input to a file.
+      return options.some((option) => {
+        const name = option.split("=")[0] ?? "";
+
+        return (
+          /^-[A-Za-z]*[oO]/.test(option) ||
+          (name.length >= 5 &&
+            ("--log-file".startsWith(name) || "--LOG-FILE".startsWith(name)))
+        );
+      });
     default:
       return false;
   }
@@ -732,7 +757,8 @@ const readGit = (
 } => {
   const dirs: string[] = [];
   const dirIndexes = new Set<number>();
-  // `-c` or `--config-env` can point git at a pager or tool that runs.
+  // `-c`, `--config-env` or `--exec-path=` can point git at a pager, tool or
+  // program folder that runs.
   let hasConfig = false;
 
   for (let i = 1; i < words.length; i += 1) {
@@ -745,7 +771,11 @@ const readGit = (
       continue;
     }
 
-    if (text.startsWith("-c") || text.startsWith("--config-env")) {
+    if (
+      text.startsWith("-c") ||
+      text.startsWith("--config-env") ||
+      text.startsWith("--exec-path=")
+    ) {
       hasConfig = true;
     }
 

@@ -48,8 +48,10 @@ A command is split into parts on `&&`, `||`, `;`, `|`, `&` and new lines (not in
   `sed -n` with a plain print script (`1p`, `10,20p`, `/re/p`), and `git log`, `show`, `diff`,
   `status`, `blame`. Not read-only after all: `find` with `-delete`, `-exec`, `-execdir`, `-ok`,
   `-okdir`, `-fprint`, `-fprint0`, `-fprintf` or `-fls`; `sort` with any option outside a
-  known-safe set (such as `-o`, `--output`, `-T` or `--compress-program`); `tree` with `-o` or
-  `--output`; `git` with `--output…`, or with `-c` or `--config-env` before the subcommand; any
+  known-safe set (such as `-o`, `--output`, `-T` or `--compress-program`); `tree` with `-o`,
+  `--output`, or `-R` together with `-H`; `rg` with `--pre` or `--hostname-bin`; `less` with
+  `-o`, `-O`, `--log-file` or `--LOG-FILE`; `git` with `--output…`, or with `-c`,
+  `--config-env` or `--exec-path=` before the subcommand; any
   other `sed` (such as `-i`, `-f` or a script with `s`, `w` or `e`), where a file named after
   `w` in the script is checked too. `source` and `.` run a script, so a script outside asks.
 
