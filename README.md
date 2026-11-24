@@ -18,6 +18,7 @@ Each mod is a small plugin that adds a helper or changes what you see while you 
 | `mod-switch`     | Turn mods on and off from one panel                                    | 0.1.0   |
 | `ddev-guard`     | Run PHP, Composer and vendor/bin tools inside DDEV                     | 0.1.0   |
 | `repo-fence`     | Ask before Claude changes files outside the repository                 | 0.1.0   |
+| `project-badge`  | Project type by the prompt, matching rules for Claude                  | 0.1.0   |
 
 ## Requirements
 
@@ -53,7 +54,7 @@ claude plugin install task-bar@qol
 All nine at once:
 
 ```bash
-for m in task-bar fresh-start cache-timer prompt-shaper lesson-saver chat-ledger privacy-mask replay-theater mod-switch ddev-guard repo-fence; do
+for m in task-bar fresh-start cache-timer prompt-shaper lesson-saver chat-ledger privacy-mask replay-theater mod-switch ddev-guard repo-fence project-badge; do
   claude plugin install "$m@qol"
 done
 ```

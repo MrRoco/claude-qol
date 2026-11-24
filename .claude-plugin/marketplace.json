@@ -59,6 +59,11 @@
       "name": "repo-fence",
       "source": "./plugins/repo-fence",
       "description": "Asks before Claude changes files or works outside the session's repository"
+    },
+    {
+      "name": "project-badge",
+      "source": "./plugins/project-badge",
+      "description": "Shows the project type (DDEV, Laravel, MODX, n8n) by the prompt and gives Claude the matching rules"
     }
   ]
 }
