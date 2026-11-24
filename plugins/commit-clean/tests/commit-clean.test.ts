@@ -106,13 +106,118 @@ test("an anthropic.com co-author and any casing are removed", async ($, on) => {
   );
   await bash(
     $,
-    `git commit --message="feat: y\n\nCO-AUTHORED-BY: claude <x@y.z>"`,
+    `git commit --message="feat: y\n\nCO-AUTHORED-BY: claude SONNET 4 <x@y.z>"`,
+  );
+  await bash(
+    $,
+    `git commit -m "feat: z\n\nCo-Authored-By: Claude Code <x@example.com>"`,
   );
 
   expect(shell.ran).toEqual([
     'git commit -m "feat: x"',
     'git commit --message="feat: y"',
+    'git commit -m "feat: z"',
   ]);
+});
+
+test("a person named Claude stays as co-author", async ($, on) => {
+  const shell = world(on);
+  const command =
+    'git commit -m "feat: x\n\nCo-Authored-By: Claude Dupont <claude.dupont@example.com>"';
+
+  const out = await bash($, command);
+
+  expect(shell.ran).toEqual([command]);
+  expect(out.context).toBeUndefined();
+});
+
+test("a body sentence about Claude Code stays; trailer-like lines go", async ($, on) => {
+  const shell = world(on);
+  const body = "The README was generated with Claude Code once.";
+  const long = `Generated with Claude Code ${"x".repeat(80)}`;
+  const keep = [
+    heredocCommit(`docs: update readme\n\n${body}`),
+    heredocCommit(`docs: update readme\n\n${long}`),
+  ];
+
+  for (const command of keep) {
+    expect((await bash($, command)).context).toBeUndefined();
+  }
+
+  await bash($, heredocCommit("feat: x\n\n🤖 generated with claude code"));
+  await bash(
+    $,
+    heredocCommit("feat: y\n\nMade, generated with https://x.y/ Claude Code"),
+  );
+
+  expect(shell.ran).toEqual([
+    ...keep,
+    heredocCommit("feat: x"),
+    heredocCommit("feat: y"),
+  ]);
+});
+
+test("git's default merge and revert subjects pass", async ($, on) => {
+  const shell = world(on);
+  const commands = [
+    `git commit -m "Merge branch 'feature/importer-with-a-rather-long-name' into develop-for-release"`,
+    "git commit -m 'Merge pull request #12 from acme/fix'",
+    "git commit -m \"Merge remote-tracking branch 'origin/main'\"",
+    heredocCommit('Revert "feat: add importer"\n\nThis reverts commit abc123.'),
+  ];
+
+  for (const command of commands) {
+    expect((await bash($, command)).deny).toBeUndefined();
+  }
+
+  expect(shell.ran).toEqual(commands);
+  expect(await bash($, "git commit -m 'Merge stuff'")).toEqual({
+    deny: hint("Merge stuff"),
+  });
+  expect(await bash($, "git commit -m 'Revert the importer'")).toEqual({
+    deny: hint("Revert the importer"),
+  });
+});
+
+test("an AI --trailer is removed with its option; human trailers stay", async ($, on) => {
+  const shell = world(on);
+
+  const out = await bash(
+    $,
+    `git commit -m "feat: x" --trailer "Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>" --trailer "Reviewed-by: Jane <jane@example.com>"`,
+  );
+  await bash(
+    $,
+    "git commit -m 'feat: y' --trailer='Co-authored-by=Claude Code <x@example.com>'",
+  );
+  const human = `git commit -m "feat: z" --trailer "Co-authored-by: Claude Dupont <c@example.com>"`;
+  const humanOut = await bash($, human);
+
+  expect(shell.ran).toEqual([
+    'git commit -m "feat: x" --trailer "Reviewed-by: Jane <jane@example.com>"',
+    "git commit -m 'feat: y'",
+    human,
+  ]);
+  expect(out.context).toEqual([NOTE]);
+  expect(humanOut.context).toBeUndefined();
+});
+
+test("cat <<'EOF' | git commit -F -: handled like -F - <<'EOF'", async ($, on) => {
+  const shell = world(on);
+
+  const out = await bash(
+    $,
+    `cat <<'EOF' | git commit -F -\nfix(api): handle empty rows\n\n${CO_AUTHOR}\nEOF`,
+  );
+
+  expect(shell.ran).toEqual([
+    "cat <<'EOF' | git commit -F -\nfix(api): handle empty rows\nEOF",
+  ]);
+  expect(out.context).toEqual([NOTE]);
+  expect(
+    await bash($, "cat <<'EOF' | git commit -F -\nUpdated it\nEOF"),
+  ).toEqual({ deny: hint("Updated it") });
+  expect(shell.ran).toHaveLength(1);
 });
 
 test("a human co-author, other trailers and the body stay", async ($, on) => {

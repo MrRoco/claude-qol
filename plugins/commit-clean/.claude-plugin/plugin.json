@@ -1,6 +1,6 @@
 {
   "name": "commit-clean",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Removes AI attribution from commit messages and checks for conventional commit subjects",
   "author": { "name": "MrRoco" },
   "license": "MIT",
